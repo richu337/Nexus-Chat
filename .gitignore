@@ -30,21 +30,6 @@ dist-ssr
 
 # Firebase secrets
 server/service-account.json
-android/app/google-services.json
-
-# Android signing / builds
-*.apk
-*.aab
-*.jks
-*.keystore
-android/app/release
 
 # Firebase
 firebase-debug.log
-
-# Capacitor / Android build
-android/.gradle
-android/app/build
-android/build
-android/local.properties
-android/.idea

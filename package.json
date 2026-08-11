@@ -3,21 +3,17 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Nexus Chat — modern real-time messaging for web and Android",
+  "description": "Nexus Chat — modern real-time messaging for the web",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit",
     "lint": "tsc -b --noEmit",
-    "android:sync": "npm run build && npx cap sync android",
-    "android:open": "npx cap open android",
     "release": "npm run build && node scripts/release.mjs",
-    "icons": "npx capacitor-assets generate --android && npx cap sync android",
     "server": "node server/index.js"
   },
   "dependencies": {
-    "@capacitor/android": "^8.0.0",
     "@capacitor/app": "^8.0.0",
     "@capacitor/core": "^8.0.0",
     "@capacitor/dialog": "^8.0.1",
@@ -30,8 +26,6 @@
     "react-router-dom": "^7.0.0"
   },
   "devDependencies": {
-    "@capacitor/assets": "^3.0.5",
-    "@capacitor/cli": "^8.0.0",
     "@tailwindcss/vite": "^4.3.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
