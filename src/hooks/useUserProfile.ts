@@ -50,9 +50,14 @@ export function useCurrentUserProfile(uid: string | undefined): {
 
   const refresh = async () => {
     if (!uid) return
-    const p = await getUserProfile(uid)
-    setProfile(p)
-    setLoading(false)
+    try {
+      const p = await getUserProfile(uid)
+      setProfile(p)
+    } catch {
+      setProfile(null)
+    } finally {
+      setLoading(false)
+    }
   }
 
   useEffect(() => {
