@@ -13,6 +13,7 @@
     "android:sync": "npm run build && npx cap sync android",
     "android:open": "npx cap open android",
     "release": "npm run build && node scripts/release.mjs",
+    "icons": "npx capacitor-assets generate --android && npx cap sync android",
     "server": "node server/index.js"
   },
   "dependencies": {
@@ -29,6 +30,7 @@
     "react-router-dom": "^7.0.0"
   },
   "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
     "@capacitor/cli": "^8.0.0",
     "@tailwindcss/vite": "^4.3.0",
     "@types/react": "^19.0.0",
