@@ -30,6 +30,27 @@ repositories {
     }
 }
 
+// Native push is only safe to call when google-services.json exists (it
+// initializes the native FirebaseApp that FirebaseMessaging depends on).
+// Write a marker into the bundled web assets so the JS layer knows whether it
+// can call @capacitor/push-notifications' register() without crashing.
+def hasNativeFirebase = file('google-services.json').exists()
+
+def generateNativePushFlag = tasks.register('generateNativePushFlag') {
+    def markerDir = file('src/main/assets/public')
+    def marker = file("${markerDir}/native-push-enabled.json")
+    inputs.property('enabled', hasNativeFirebase)
+    outputs.file(marker)
+    doLast {
+        markerDir.mkdirs()
+        marker.text = '{"enabled":' + hasNativeFirebase + '}'
+    }
+}
+
+tasks.matching { it.name == 'mergeDebugAssets' || it.name == 'mergeReleaseAssets' }.configureEach {
+    dependsOn generateNativePushFlag
+}
+
 dependencies {
     implementation fileTree(include: ['*.jar'], dir: 'libs')
     implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"

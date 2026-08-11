@@ -8,6 +8,23 @@ import { isNativePlatform } from '@/utils/platform'
 import { useNavigate } from 'react-router-dom'
 
 /**
+ * Tells us whether the APK was built with native Firebase configured
+ * (google-services.json present). Without it, @capacitor/push-notifications'
+ * register() crashes the app natively, so we must skip the whole native block.
+ * The marker is written into the bundle by android/app/build.gradle.
+ */
+async function nativePushEnabled(): Promise<boolean> {
+  try {
+    const res = await fetch('/native-push-enabled.json')
+    if (!res.ok) return false
+    const data = (await res.json()) as { enabled?: boolean }
+    return data.enabled === true
+  } catch {
+    return false
+  }
+}
+
+/**
  * Sets up push notification plumbing once per signed-in user:
  *  - Android (Capacitor): requests permission, registers the FCM token, and
  *    listens for taps to deep-link into the right conversation.
@@ -28,6 +45,12 @@ export function NotificationInit() {
       let cancelled = false
 
       const registerAndroid = async () => {
+        // Only touch the native push plugin when Firebase is configured;
+        // otherwise register() throws an uncaught native exception that
+        // kills the app.
+        const enabled = await nativePushEnabled()
+        if (!enabled || cancelled) return
+
         try {
           const perm = await PushNotifications.requestPermissions()
           if (perm.receive !== 'granted') {
