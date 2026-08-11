@@ -1,0 +1,191 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function uid() {
+      return request.auth.uid;
+    }
+
+    function isOwn(uid) {
+      return uid == request.auth.uid;
+    }
+
+    function existsUser(uid) {
+      return exists(/databases/$(database)/documents/users/$(uid));
+    }
+
+    function getUser(uid) {
+      let u = get(/databases/$(database)/documents/users/$(uid));
+      return u != null ? u.data : null;
+    }
+
+    function isBlockedBetween(a, b) {
+      let id1 = a < b ? a : b;
+      let id2 = a < b ? b : a;
+      return exists(/databases/$(database)/documents/blocks/$(id1 + '_' + id2));
+    }
+
+    function areFriends(a, b) {
+      let id1 = a < b ? a : b;
+      let id2 = a < b ? b : a;
+      return exists(/databases/$(database)/documents/friendships/$(id1 + '_' + id2));
+    }
+
+    // ── users ──────────────────────────────────────────────────────────────
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      // Self-create only; a user may only write their own profile.
+      allow create: if isSignedIn() && isOwn(userId);
+      allow update: if isSignedIn() && isOwn(userId);
+      allow delete: if isSignedIn() && isOwn(userId);
+    }
+
+    // ── usernames (uniqueness index) ───────────────────────────────────────
+    match /usernames/{usernameLower} {
+      // Anyone can read availability.
+      allow read: if isSignedIn();
+      // Only own the reservation pointing at my uid.
+      allow create, update: if isSignedIn()
+        && request.resource.data.uid == request.auth.uid;
+      allow delete: if isSignedIn()
+        && resource.data.uid == request.auth.uid;
+    }
+
+    // ── friendRequests ─────────────────────────────────────────────────────
+    match /friendRequests/{requestId} {
+      function requester() {
+        return resource != null && resource.data != null ? resource.data.senderId : null;
+      }
+      function receiver() {
+        return resource != null && resource.data != null ? resource.data.receiverId : null;
+      }
+      function isParticipant() {
+        return requester() == uid() || receiver() == uid();
+      }
+
+      allow read: if isSignedIn() && (resource == null || isParticipant());
+      allow create: if isSignedIn()
+        && request.resource.data.senderId == uid()
+        && request.resource.data.receiverId != uid()
+        && request.resource.data.status == 'pending'
+        && existsUser(request.resource.data.receiverId)
+        && !isBlockedBetween(request.resource.data.senderId, request.resource.data.receiverId)
+        && !areFriends(request.resource.data.senderId, request.resource.data.receiverId);
+      // Sender may cancel or re-send (pending) after a rejection; receiver may
+      // accept/reject/cancel. senderId/receiverId are immutable. A sender can
+      // never self-approve their own request.
+      allow update: if isSignedIn() && isParticipant()
+        && request.resource.data.senderId == resource.data.senderId
+        && request.resource.data.receiverId == resource.data.receiverId
+        && (
+          (requester() == uid() && request.resource.data.status in ['pending', 'cancelled'])
+          || (receiver() == uid() && request.resource.data.status in ['accepted', 'rejected', 'cancelled'])
+        );
+      allow delete: if isSignedIn() && isParticipant();
+    }
+
+    // ── friendships ────────────────────────────────────────────────────────
+    match /friendships/{friendshipId} {
+      function isMember() {
+        return resource != null && resource.data != null && uid() in resource.data.members;
+      }
+
+      allow read: if isSignedIn() && (resource == null || isMember());
+      // Only created when an accepted friend request exists between the two
+      // members (requestId is deterministic in either direction).
+      allow create: if isSignedIn()
+        && request.resource.data.members.size() == 2
+        && uid() in request.resource.data.members
+        && get(/databases/$(database)/documents/friendRequests/$(request.resource.data.members[0] + '_' + request.resource.data.members[1])) != null
+        && get(/databases/$(database)/documents/friendRequests/$(request.resource.data.members[0] + '_' + request.resource.data.members[1])).data.status == 'accepted'
+        || get(/databases/$(database)/documents/friendRequests/$(request.resource.data.members[1] + '_' + request.resource.data.members[0])) != null
+          && get(/databases/$(database)/documents/friendRequests/$(request.resource.data.members[1] + '_' + request.resource.data.members[0])).data.status == 'accepted';
+      allow delete: if isSignedIn() && isMember();
+      allow update: if false;
+    }
+
+    // ── blocks ─────────────────────────────────────────────────────────────
+    match /blocks/{blockId} {
+      function isBlocker() {
+        return resource != null && resource.data != null && resource.data.blockerId == uid();
+      }
+      function isBlocked() {
+        return resource != null && resource.data != null && resource.data.blockedId == uid();
+      }
+
+      allow read: if isSignedIn() && (resource == null || isBlocker() || isBlocked());
+      allow create: if isSignedIn()
+        && request.resource.data.blockerId == uid()
+        && request.resource.data.blockedId != uid()
+        && existsUser(request.resource.data.blockedId);
+      allow delete: if isSignedIn() && isBlocker();
+      allow update: if false;
+    }
+
+    // ── conversations ──────────────────────────────────────────────────────
+    match /conversations/{conversationId} {
+      function isMember() {
+        return resource != null && resource.data != null && uid() in resource.data.members;
+      }
+      function reqIsMember() { return uid() in request.resource.data.members; }
+
+      allow read: if isSignedIn() && (resource == null || isMember());
+      // Only create 1:1 conversations and only with non-blocked users.
+      allow create: if isSignedIn()
+        && request.resource.data.members.size() == 2
+        && request.resource.data.type == 'direct'
+        && reqIsMember()
+        && !isBlockedBetween(request.resource.data.members[0], request.resource.data.members[1]);
+      // Members may update unread counts, lastReadAt, typing etc. but never
+      // change membership.
+      allow update: if isSignedIn() && isMember()
+        && request.resource.data.members == resource.data.members;
+      allow delete: if isSignedIn() && isMember();
+
+      // Typing heartbeat document (lightweight, throttled).
+      match /_typing/{docId} {
+        allow read: if isSignedIn()
+          && get(/databases/$(database)/documents/conversations/$(conversationId)) != null
+          && uid() in get(/databases/$(database)/documents/conversations/$(conversationId)).data.members;
+        allow write: if isSignedIn()
+          && get(/databases/$(database)/documents/conversations/$(conversationId)) != null
+          && uid() in get(/databases/$(database)/documents/conversations/$(conversationId)).data.members;
+      }
+
+      // ── messages ─────────────────────────────────────────────────────────
+      match /messages/{messageId} {
+        function convo() {
+          let c = get(/databases/$(database)/documents/conversations/$(conversationId));
+          return c != null ? c.data : null;
+        }
+
+        allow read: if isSignedIn() && (resource == null || (convo() != null && uid() in convo().members));
+        allow create: if isSignedIn()
+          && request.resource.data.senderId == uid()
+          && convo() != null
+          && uid() in convo().members
+          && request.resource.data.type == 'text'
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 4000
+          && !isBlockedBetween(convo().members[0], convo().members[1]);
+        // Sender may update their own message metadata; recipients may mark
+        // delivered/read. Only status metadata fields may change, and senderId
+        // and text are immutable.
+        allow update: if isSignedIn()
+          && convo() != null
+          && uid() in convo().members
+          && request.resource.data.senderId == resource.data.senderId
+          && request.resource.data.text == resource.data.text
+          && request.resource.data.type == resource.data.type
+          && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['status', 'deliveredAt', 'readAt', 'updatedAt']);
+        allow delete: if false;
+      }
+    }
+  }
+}
