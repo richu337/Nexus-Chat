@@ -15,7 +15,7 @@ const config: CapacitorConfig = {
       enabled: true,
     },
     CapacitorUpdater: {
-      autoUpdate: 'onlyDownload',
+      autoUpdate: false,
     },
   },
 };

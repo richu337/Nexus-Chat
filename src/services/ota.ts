@@ -2,19 +2,37 @@ import { Capacitor } from '@capacitor/core'
 import { CapacitorUpdater } from '@capgo/capacitor-updater'
 import { Dialog } from '@capacitor/dialog'
 
+const MANIFEST_URL = import.meta.env.VITE_UPDATE_MANIFEST_URL as string | undefined
+
 let initialized = false
 
+function parseVersion(v: string): number[] {
+  return v.split('.').map((n) => parseInt(n, 10) || 0)
+}
+
+function isNewer(a: string, b: string): boolean {
+  const x = parseVersion(a)
+  const y = parseVersion(b)
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const xv = x[i] ?? 0
+    const yv = y[i] ?? 0
+    if (xv !== yv) return xv > yv
+  }
+  return false
+}
+
 /**
- * Sets up Capgo over-the-air updates for the native app.
+ * Self-hosted over-the-air updates (no Capgo Cloud).
  *
- * - `notifyAppReady()` tells the native layer the bundled JS loaded fine so it
- *   never rolls back a healthy bundle.
- * - `autoUpdate: 'onlyDownload'` (see capacitor.config.ts) makes the plugin
- *   download updates in the background but NOT apply them automatically. The
- *   `updateAvailable` event fires once a new version is downloaded, and we ask
- *   the user (Update / Later) before switching to it.
+ * On every native launch:
+ *  1. `notifyAppReady()` confirms the bundle loaded fine (prevents rollback).
+ *  2. We fetch the update manifest from our own server
+ *     (VITE_UPDATE_MANIFEST_URL → latest.json).
+ *  3. If the published version is newer than the running bundle, we ask the
+ *     user (Update / Later) and only then download + apply the new bundle.
  *
- * No-op on web — OTA only applies inside the Android/iOS WebView.
+ * The bundle URL is resolved against the manifest URL, so it works whatever
+ * domain the server ends up on. No-op on web.
  */
 export function initOTA(): void {
   if (!Capacitor.isNativePlatform()) return
@@ -22,20 +40,35 @@ export function initOTA(): void {
   initialized = true
 
   void CapacitorUpdater.notifyAppReady().catch(() => {})
+  void checkForUpdate()
+}
 
-  void CapacitorUpdater.addListener('updateAvailable', async (info) => {
-    try {
-      const { value } = await Dialog.confirm({
-        title: 'Update available',
-        message: `A new version (${info.bundle.version}) is ready to install. Update now?`,
-        okButtonTitle: 'Update',
-        cancelButtonTitle: 'Later',
-      })
-      if (value) {
-        await CapacitorUpdater.set(info.bundle)
-      }
-    } catch {
-      // ignore — user can update next time the check runs
-    }
-  })
+async function checkForUpdate(): Promise<void> {
+  if (!MANIFEST_URL) return
+  try {
+    const [manifest, current] = await Promise.all([
+      fetch(MANIFEST_URL).then((r) => {
+        if (!r.ok) throw new Error('manifest request failed')
+        return r.json() as Promise<{ version: string; file: string }>
+      }),
+      CapacitorUpdater.current(),
+    ])
+
+    if (!manifest.version || !manifest.file) return
+    if (!isNewer(manifest.version, current.bundle.version)) return
+
+    const { value } = await Dialog.confirm({
+      title: 'Update available',
+      message: `A new version (${manifest.version}) is ready to install. Update now?`,
+      okButtonTitle: 'Update',
+      cancelButtonTitle: 'Later',
+    })
+    if (!value) return
+
+    const url = new URL(manifest.file, MANIFEST_URL).toString()
+    const bundle = await CapacitorUpdater.download({ url, version: manifest.version })
+    await CapacitorUpdater.set(bundle)
+  } catch {
+    // ignore — the app still works; we retry on next launch
+  }
 }

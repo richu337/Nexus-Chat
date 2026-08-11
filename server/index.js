@@ -1,4 +1,6 @@
 import 'dotenv/config'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import express from 'express'
 import cors from 'cors'
 import admin from 'firebase-admin'
@@ -10,9 +12,16 @@ import {
   sendFriendRequestAcceptedNotification,
 } from './services.js'
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+
 const app = express()
 app.use(cors())
 app.use(express.json({ limit: '1mb' }))
+
+// ── Static update bundles (OTA) ─────────────────────────────────────────────
+// Serve the `server/bundles/` folder so the app can fetch latest.json and
+// dist.zip for over-the-air updates. Created by `npm run release`.
+app.use('/update', express.static(path.join(__dirname, 'bundles'), { maxAge: '1h' }))
 
 // ── Firebase Admin init ────────────────────────────────────────────────────
 let projectId = process.env.FIREBASE_PROJECT_ID
