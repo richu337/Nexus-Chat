@@ -124,18 +124,17 @@ export default function Requests() {
 
   useEffect(() => {
     if (!me) return
-    let alive = true
 
     const unsub1 = subscribeToIncomingRequests(me, (reqs) => {
-      if (alive) { setIncoming(reqs); setLoading(false) }
+      setIncoming(reqs)
+      setLoading(false)
     })
     const unsub2 = subscribeToOutgoingRequests(me, (reqs) => {
-      if (alive) { setOutgoing(reqs); setLoading(false) }
+      setOutgoing(reqs)
+      setLoading(false)
     })
 
-    const timeout = setTimeout(() => { if (alive) setLoading(false) }, 8000)
-
-    return () => { alive = false; unsub1(); unsub2(); clearTimeout(timeout) }
+    return () => { unsub1(); unsub2() }
   }, [me])
 
   return (

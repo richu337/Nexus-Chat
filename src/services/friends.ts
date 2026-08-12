@@ -45,7 +45,7 @@ export function subscribeToIncomingRequests(uid: string, onChange: (requests: Fr
   )
   return onSnapshot(q, (snap) => {
     onChange(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as FriendRequest))
-  }, () => onChange([]))
+  })
 }
 
 export function subscribeToOutgoingRequests(uid: string, onChange: (requests: FriendRequest[]) => void) {
@@ -57,7 +57,7 @@ export function subscribeToOutgoingRequests(uid: string, onChange: (requests: Fr
   )
   return onSnapshot(q, (snap) => {
     onChange(snap.docs.map((d) => ({ id: d.id, ...d.data() }) as FriendRequest))
-  }, () => onChange([]))
+  })
 }
 
 /**
