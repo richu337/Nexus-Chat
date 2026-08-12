@@ -25,17 +25,40 @@ import { formatMessageTime } from '@/utils/time'
 import { validateMessage } from '@/utils/validators'
 import type { Message } from '@/types'
 
-function MessageStatusIcon({ message }: { message: Message }) {
-  if (message.status === 'sending') return null
-  if (message.status === 'error') {
-    return <span className="text-[10px] text-rose-500">Failed</span>
+function MessageStatusIcon({ message, isNew }: { message: Message; isNew?: boolean }) {
+  if (message.status === 'sending') {
+    return (
+      <span className="inline-flex items-center gap-0.5">
+        <span className="h-1 w-1 rounded-full bg-white/50 animate-pulse" />
+        <span className="h-1 w-1 rounded-full bg-white/50 animate-pulse [animation-delay:150ms]" />
+        <span className="h-1 w-1 rounded-full bg-white/50 animate-pulse [animation-delay:300ms]" />
+      </span>
+    )
   }
-  const isRead = message.status === 'read'
-  const isDelivered = message.status === 'delivered'
-  return isRead || isDelivered ? (
-    <CheckCheck className={`h-4 w-4 ${isRead ? 'text-sky-500' : 'text-slate-400'}`} aria-hidden />
-  ) : (
-    <Check className="h-4 w-4 text-slate-400" aria-hidden />
+  if (message.status === 'error') {
+    return <span className="text-[10px] font-medium text-rose-300">Failed</span>
+  }
+  if (message.status === 'read') {
+    return (
+      <CheckCheck
+        className={`h-4 w-4 text-sky-300 ${isNew ? 'tick-enter' : ''}`}
+        aria-label="Read"
+      />
+    )
+  }
+  if (message.status === 'delivered') {
+    return (
+      <CheckCheck
+        className={`h-4 w-4 text-white/60 ${isNew ? 'tick-enter' : ''}`}
+        aria-label="Delivered"
+      />
+    )
+  }
+  return (
+    <Check
+      className={`h-4 w-4 text-white/60 ${isNew ? 'tick-enter' : ''}`}
+      aria-label="Sent"
+    />
   )
 }
 
@@ -64,6 +87,8 @@ export default function Chat() {
   const shouldStickRef = useRef(true)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const seenRef = useRef<Set<string>>(new Set())
+  const prevCountRef = useRef(0)
+  const animatingRef = useRef<Set<string>>(new Set())
 
   // ── Messages subscription ────────────────────────────────────────────────
   useEffect(() => {
@@ -71,6 +96,7 @@ export default function Chat() {
     setMessages([])
     setHasOlder(false)
     seenRef.current = new Set()
+    animatingRef.current = new Set()
     shouldStickRef.current = true
 
     const unsub = subscribeToMessages(
@@ -101,13 +127,20 @@ export default function Chat() {
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return
-    if (shouldStickRef.current) {
-      el.scrollTop = el.scrollHeight
-    }
-  }, [messages.length])
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'auto' })
+    const newCount = messages.length
+    const added = newCount - prevCountRef.current
+    prevCountRef.current = newCount
+
+    if (shouldStickRef.current) {
+      if (added > 0) {
+        requestAnimationFrame(() => {
+          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+        })
+      } else {
+        el.scrollTop = el.scrollHeight
+      }
+    }
   }, [messages.length])
 
   // ── Mark as read / delivered ─────────────────────────────────────────────
@@ -212,6 +245,7 @@ export default function Chat() {
       deliveredAt: null,
       readAt: null,
     }
+    animatingRef.current.add(optimistic.id)
     setMessages((prev) => [...prev, optimistic])
     setInput('')
     shouldStickRef.current = true
@@ -219,6 +253,8 @@ export default function Chat() {
 
     try {
       const saved = await sendMessage(conversationId, me, text)
+      animatingRef.current.add(saved.id)
+      animatingRef.current.delete(optimistic.id)
       setMessages((prev) =>
         Array.from(
           new Map(
@@ -228,6 +264,7 @@ export default function Chat() {
           ).values(),
         ),
       )
+      setTimeout(() => animatingRef.current.delete(saved.id), 350)
       void stopTyping(conversationId, me)
       // Best-effort push notification.
       if (otherId && otherUser) {
@@ -361,6 +398,7 @@ export default function Chat() {
               idx === 0 ||
               (messages[idx - 1]?.senderId !== msg.senderId) ||
               ((messages[idx - 1]?.createdAt?.toMillis() ?? 0) < (msg.createdAt?.toMillis() ?? 0) - 5 * 60_000)
+            const isNew = animatingRef.current.has(msg.id)
             return (
               <div key={msg.id}>
                 {showTime && msg.createdAt && (
@@ -373,6 +411,8 @@ export default function Chat() {
                 <div className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
                   <div
                     className={`max-w-[80%] rounded-2xl px-3.5 py-2 text-sm leading-relaxed sm:max-w-[70%] ${
+                      isNew ? 'msg-enter' : ''
+                    } ${
                       mine
                         ? 'rounded-br-md bg-indigo-600 text-white'
                         : 'rounded-bl-md bg-white text-slate-800 shadow-sm ring-1 ring-slate-200 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700'
@@ -380,8 +420,8 @@ export default function Chat() {
                   >
                     <span className="whitespace-pre-wrap break-words">{msg.text}</span>
                     {mine && (
-                      <span className="ml-2 inline-flex translate-y-0.5 items-center">
-                        <MessageStatusIcon message={msg} />
+                      <span className="ml-2 inline-flex items-center">
+                        <MessageStatusIcon message={msg} isNew={isNew} />
                       </span>
                     )}
                   </div>

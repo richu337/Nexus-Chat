@@ -20,7 +20,6 @@ import type { FriendRequest } from '@/types'
 function IncomingRow({ request }: { request: FriendRequest }) {
   const { user: authUser } = useAuth()
   const { user } = useCurrentUserProfile(request.senderId)
-  const { user: myProfile } = useCurrentUserProfile(authUser?.uid)
   const { showToast } = useToast()
   const [busy, setBusy] = useState(false)
 
@@ -44,7 +43,7 @@ function IncomingRow({ request }: { request: FriendRequest }) {
           onClick={async () => {
             setBusy(true)
             try {
-              await acceptFriendRequest(request, myProfile?.name ?? undefined)
+              await acceptFriendRequest(request)
               showToast('Friend request accepted.', 'success')
             } catch (err) {
               showToast(err instanceof Error ? err.message : 'Could not accept request.', 'error')
@@ -125,17 +124,18 @@ export default function Requests() {
 
   useEffect(() => {
     if (!me) return
-    const unsubs = [
-      subscribeToIncomingRequests(me, (reqs) => {
-        setIncoming(reqs)
-        setLoading(false)
-      }),
-      subscribeToOutgoingRequests(me, (reqs) => {
-        setOutgoing(reqs)
-        setLoading(false)
-      }),
-    ]
-    return () => unsubs.forEach((u) => u())
+    let alive = true
+
+    const unsub1 = subscribeToIncomingRequests(me, (reqs) => {
+      if (alive) { setIncoming(reqs); setLoading(false) }
+    })
+    const unsub2 = subscribeToOutgoingRequests(me, (reqs) => {
+      if (alive) { setOutgoing(reqs); setLoading(false) }
+    })
+
+    const timeout = setTimeout(() => { if (alive) setLoading(false) }, 8000)
+
+    return () => { alive = false; unsub1(); unsub2(); clearTimeout(timeout) }
   }, [me])
 
   return (
