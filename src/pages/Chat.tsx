@@ -89,8 +89,7 @@ export default function Chat() {
   const seenRef = useRef<Set<string>>(new Set())
   const prevCountRef = useRef(0)
   const animatingRef = useRef<Set<string>>(new Set())
-  const sendingOptimisticRef = useRef<string | null>(null)
-  const sendingRealIdRef = useRef<string | null>(null)
+  const sendingRef = useRef(false)
 
   // ── Messages subscription ────────────────────────────────────────────────
   useEffect(() => {
@@ -99,30 +98,23 @@ export default function Chat() {
     setHasOlder(false)
     seenRef.current = new Set()
     animatingRef.current = new Set()
+    sendingRef.current = false
     shouldStickRef.current = true
 
     const unsub = subscribeToMessages(
       conversationId,
       (msgs) => {
+        // While a send is in progress, ignore subscription updates to avoid
+        // the optimistic + real duplicate flash. The send handler will
+        // replace the optimistic with the real message when it resolves.
+        if (sendingRef.current) return
         setMessages((prev) => {
           const merged = new Map(prev.map((m) => [m.id, m]))
-          for (const m of msgs) {
-            // Skip the real message if we're still showing the optimistic one
-            // for this text+sender — avoids the brief duplicate flash.
-            if (sendingRealIdRef.current === m.id && sendingOptimisticRef.current) {
-              continue
-            }
-            merged.set(m.id, m)
-          }
-          // Remove the optimistic once the real message arrives
-          if (sendingOptimisticRef.current && sendingRealIdRef.current) {
-            merged.delete(sendingOptimisticRef.current)
-          }
+          for (const m of msgs) merged.set(m.id, m)
           return Array.from(merged.values()).sort((a, b) => {
             return (a.createdAt?.toMillis() ?? 0) - (b.createdAt?.toMillis() ?? 0)
           })
         })
-        // If we got a full page back, there may be older messages.
         if (msgs.length >= 40) setHasOlder(true)
         else setHasOlder(false)
       },
@@ -245,6 +237,7 @@ export default function Chat() {
     if (err || sending) return
 
     setSending(true)
+    sendingRef.current = true
     const optimistic: Message = {
       id: `local-${Date.now()}`,
       conversationId,
@@ -258,8 +251,6 @@ export default function Chat() {
       readAt: null,
     }
     animatingRef.current.add(optimistic.id)
-    sendingOptimisticRef.current = optimistic.id
-    sendingRealIdRef.current = null
     setMessages((prev) => [...prev, optimistic])
     setInput('')
     shouldStickRef.current = true
@@ -267,7 +258,6 @@ export default function Chat() {
 
     try {
       const saved = await sendMessage(conversationId, me, text)
-      sendingRealIdRef.current = saved.id
       animatingRef.current.add(saved.id)
       animatingRef.current.delete(optimistic.id)
       setMessages((prev) => {
@@ -275,8 +265,6 @@ export default function Chat() {
         return [...next, { ...saved, status: 'sent' as const }]
       })
       setTimeout(() => animatingRef.current.delete(saved.id), 350)
-      sendingOptimisticRef.current = null
-      sendingRealIdRef.current = null
       void stopTyping(conversationId, me)
       // Best-effort push notification.
       if (otherId && otherUser) {
@@ -288,8 +276,6 @@ export default function Chat() {
         })
       }
     } catch {
-      sendingOptimisticRef.current = null
-      sendingRealIdRef.current = null
       setMessages((prev) =>
         prev.map((m) =>
           m.id === optimistic.id ? { ...m, status: 'error' as const } : m,
@@ -297,6 +283,7 @@ export default function Chat() {
       )
       showToast('Message could not be sent. Check your connection.', 'error')
     } finally {
+      sendingRef.current = false
       setSending(false)
     }
   }, [conversationId, me, input, sending, senderProfile, otherId, otherUser, showToast])
