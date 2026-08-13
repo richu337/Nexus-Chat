@@ -33,3 +33,8 @@ server/service-account.json
 
 # Firebase
 firebase-debug.log
+
+# Cloud Functions build output
+functions/lib
+functions/node_modules
+functions/.env*

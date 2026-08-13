@@ -1,60 +1,190 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { UserPlus } from 'lucide-react'
+import { UserPlus, Mail, ArrowLeft, CheckCircle2 } from 'lucide-react'
+import { httpsCallable } from 'firebase/functions'
 import { AuthLayout } from '@/components/auth/AuthLayout'
 import { Button } from '@/components/common/Button'
 import { Input } from '@/components/common/Input'
-import {
-  signUpWithEmail,
-  signInWithGoogle,
-  mapAuthError,
-  authErrorMessage,
-} from '@/firebase/auth'
+import { signInWithGoogle, signInWithCustomTokenId } from '@/firebase/auth'
+import { functions } from '@/firebase/config'
 import { validateEmail, validatePassword } from '@/utils/validators'
 import { useToast } from '@/hooks/useToast'
+
+type Step = 'form' | 'otp' | 'done'
 
 export default function Signup() {
   const navigate = useNavigate()
   const { showToast } = useToast()
+
+  // Form step
+  const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
-  const [errors, setErrors] = useState<{ email?: string; password?: string; confirm?: string }>({})
+  const [errors, setErrors] = useState<{ name?: string; email?: string; password?: string; confirm?: string }>({})
   const [submitting, setSubmitting] = useState(false)
   const [googleLoading, setGoogleLoading] = useState(false)
 
+  // OTP step
+  const [step, setStep] = useState<Step>('form')
+  const [otp, setOtp] = useState(['', '', '', '', '', ''])
+  const [otpError, setOtpError] = useState('')
+  const [otpLoading, setOtpLoading] = useState(false)
+  const [resendTimer, setResendTimer] = useState(0)
+
+  // ── Step 1: Send OTP ───────────────────────────────────────────────────
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
+    const nameErr = !name.trim() ? 'Name is required.' : undefined
     const emailErr = validateEmail(email)
     const passErr = validatePassword(password)
     const confirmErr = confirm !== password ? 'Passwords do not match.' : undefined
-    setErrors({ email: emailErr ?? undefined, password: passErr ?? undefined, confirm: confirmErr })
-    if (emailErr || passErr || confirmErr) return
+    setErrors({ name: nameErr, email: emailErr ?? undefined, password: passErr ?? undefined, confirm: confirmErr })
+    if (nameErr || emailErr || passErr || confirmErr) return
 
     setSubmitting(true)
     try {
-      await signUpWithEmail(email.trim(), password)
-      navigate('/setup', { replace: true })
+      const sendOtpFn = httpsCallable(functions, 'sendOtp')
+      await sendOtpFn({ email: email.trim(), name: name.trim() })
+      setStep('otp')
+      startResendTimer()
+      showToast('Verification code sent to your email.', 'success')
     } catch (err) {
-      const code = mapAuthError((err as { code?: string }).code ?? 'unknown')
-      setErrors({
-        email: ['email-already-in-use', 'invalid-email', 'user-disabled', 'operation-not-allowed'].includes(
-          code,
-        )
-          ? authErrorMessage(code)
-          : undefined,
-        password: ['weak-password', 'too-many-requests', 'network-request-failed'].includes(code)
-          ? authErrorMessage(code)
-          : undefined,
-      })
-      if (code === 'network-request-failed') {
-        showToast('Network error. Check your connection and try again.', 'error')
+      const msg = (err as { message?: string }).message ?? ''
+      if (msg.includes('already exists')) {
+        setErrors({ email: 'An account with this email already exists.' })
+      } else if (msg.includes('Too many')) {
+        setErrors({ email: 'Too many requests. Please wait a few minutes.' })
+      } else {
+        showToast('Failed to send verification code. Try again.', 'error')
       }
     } finally {
       setSubmitting(false)
     }
   }
 
+  // ── Step 2: Verify OTP ─────────────────────────────────────────────────
+  async function handleVerifyOtp() {
+    const otpString = otp.join('')
+    if (otpString.length !== 6) {
+      setOtpError('Please enter the complete 6-digit code.')
+      return
+    }
+
+    setOtpLoading(true)
+    setOtpError('')
+    try {
+      const verifyOtpFn = httpsCallable(functions, 'verifyOtp')
+      const result = await verifyOtpFn({
+        email: email.trim(),
+        otp: otpString,
+        password,
+        name: name.trim(),
+        username: name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 20),
+      })
+
+      const { customToken } = result.data as { customToken: string; uid: string }
+      await signInWithCustomTokenId(customToken)
+      setStep('done')
+      setTimeout(() => navigate('/setup', { replace: true }), 1200)
+    } catch (err) {
+      const msg = (err as { message?: string }).message ?? ''
+      if (msg.includes('Incorrect')) {
+        setOtpError('Incorrect code. Please try again.')
+      } else if (msg.includes('expired')) {
+        setOtpError('This code has expired. Please request a new one.')
+        setStep('form')
+      } else if (msg.includes('No verification')) {
+        setOtpError('No code found. Please request a new one.')
+        setStep('form')
+      } else if (msg.includes('username')) {
+        setOtpError('This username is already taken. Please choose another.')
+      } else if (msg.includes('EMAIL_EXISTS')) {
+        setOtpError('An account with this email already exists.')
+        setStep('form')
+      } else {
+        setOtpError('Verification failed. Please try again.')
+      }
+    } finally {
+      setOtpLoading(false)
+    }
+  }
+
+  // ── Resend timer ───────────────────────────────────────────────────────
+  function startResendTimer() {
+    setResendTimer(60)
+    const interval = setInterval(() => {
+      setResendTimer((prev) => {
+        if (prev <= 1) { clearInterval(interval); return 0 }
+        return prev - 1
+      })
+    }, 1000)
+  }
+
+  async function handleResendOtp() {
+    if (resendTimer > 0) return
+    try {
+      const sendOtpFn = httpsCallable(functions, 'sendOtp')
+      await sendOtpFn({ email: email.trim(), name: name.trim() })
+      startResendTimer()
+      showToast('New verification code sent.', 'success')
+    } catch {
+      showToast('Failed to resend code.', 'error')
+    }
+  }
+
+  // ── OTP input handler ──────────────────────────────────────────────────
+  function handleOtpChange(index: number, value: string) {
+    if (!/^\d*$/.test(value) && value !== '') return
+    const newOtp = [...otp]
+    newOtp[index] = value.slice(-1)
+    setOtp(newOtp)
+    setOtpError('')
+
+    // Auto-advance
+    if (value && index < 5) {
+      const next = document.getElementById(`otp-${index + 1}`)
+      next?.focus()
+    }
+
+    // Auto-submit when all 6 digits entered
+    if (value && index === 5) {
+      const full = newOtp.join('')
+      if (full.length === 6) {
+        setTimeout(() => {
+          setOtp(newOtp)
+          void handleVerifyOtp()
+        }, 100)
+      }
+    }
+  }
+
+  function handleOtpKeyDown(index: number, e: React.KeyboardEvent) {
+    if (e.key === 'Backspace' && !otp[index] && index > 0) {
+      const prev = document.getElementById(`otp-${index - 1}`)
+      prev?.focus()
+    }
+    if (e.key === 'Enter') {
+      void handleVerifyOtp()
+    }
+  }
+
+  function handleOtpPaste(e: React.ClipboardEvent) {
+    const pasted = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6)
+    if (pasted) {
+      const newOtp = pasted.split('').concat(Array(6).fill('')).slice(0, 6)
+      setOtp(newOtp)
+      const focusIndex = Math.min(pasted.length, 5)
+      const next = document.getElementById(`otp-${focusIndex}`)
+      next?.focus()
+      if (pasted.length === 6) {
+        setTimeout(() => void handleVerifyOtp(), 100)
+      }
+    }
+    e.preventDefault()
+  }
+
+  // ── Google sign-in (bypasses OTP — Google already verifies email) ──────
   async function handleGoogle() {
     setGoogleLoading(true)
     try {
@@ -67,6 +197,85 @@ export default function Signup() {
     }
   }
 
+  // ── Render: OTP step ───────────────────────────────────────────────────
+  if (step === 'otp') {
+    return (
+      <AuthLayout>
+        <button
+          onClick={() => setStep('form')}
+          className="mb-4 flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+        >
+          <ArrowLeft className="h-4 w-4" /> Back
+        </button>
+
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-indigo-100 dark:bg-indigo-900/30">
+          <Mail className="h-6 w-6 text-indigo-600 dark:text-indigo-400" />
+        </div>
+        <h2 className="text-center text-2xl font-semibold text-slate-900 dark:text-white">Verify your email</h2>
+        <p className="mt-1 text-center text-sm text-slate-500 dark:text-slate-400">
+          We sent a 6-digit code to<br />
+          <span className="font-medium text-slate-700 dark:text-slate-300">{email}</span>
+        </p>
+
+        <div className="mt-6 flex justify-center gap-2">
+          {otp.map((digit, i) => (
+            <input
+              key={i}
+              id={`otp-${i}`}
+              type="text"
+              inputMode="numeric"
+              maxLength={1}
+              value={digit}
+              onChange={(e) => handleOtpChange(i, e.target.value)}
+              onKeyDown={(e) => handleOtpKeyDown(i, e)}
+              onPaste={handleOtpPaste}
+              className="h-12 w-11 rounded-xl border border-slate-200 bg-slate-50 text-center text-lg font-semibold text-slate-900 outline-none transition-colors focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+              autoFocus={i === 0}
+            />
+          ))}
+        </div>
+
+        {otpError && (
+          <p className="mt-3 text-center text-sm text-rose-600 dark:text-rose-400">{otpError}</p>
+        )}
+
+        <Button
+          onClick={() => void handleVerifyOtp()}
+          size="lg"
+          className="mt-6 w-full"
+          loading={otpLoading}
+        >
+          Verify
+        </Button>
+
+        <p className="mt-4 text-center text-sm text-slate-500 dark:text-slate-400">
+          Didn't receive the code?{' '}
+          {resendTimer > 0 ? (
+            <span className="text-slate-400">Resend in {resendTimer}s</span>
+          ) : (
+            <button onClick={() => void handleResendOtp()} className="font-semibold text-indigo-600 hover:underline dark:text-indigo-400">
+              Resend
+            </button>
+          )}
+        </p>
+      </AuthLayout>
+    )
+  }
+
+  // ── Render: Done step ──────────────────────────────────────────────────
+  if (step === 'done') {
+    return (
+      <AuthLayout>
+        <div className="flex flex-col items-center py-8">
+          <CheckCircle2 className="h-16 w-16 text-emerald-500" />
+          <h2 className="mt-4 text-2xl font-semibold text-slate-900 dark:text-white">Account created!</h2>
+          <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">Redirecting to profile setup…</p>
+        </div>
+      </AuthLayout>
+    )
+  }
+
+  // ── Render: Form step ──────────────────────────────────────────────────
   return (
     <AuthLayout>
       <h2 className="text-2xl font-semibold text-slate-900 dark:text-white">Create your account</h2>
@@ -75,6 +284,16 @@ export default function Signup() {
       </p>
 
       <form onSubmit={handleSubmit} className="mt-6 space-y-4" noValidate>
+        <Input
+          id="signup-name"
+          type="text"
+          label="Full name"
+          autoComplete="name"
+          placeholder="Your display name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          error={errors.name}
+        />
         <Input
           id="signup-email"
           type="email"
@@ -107,7 +326,7 @@ export default function Signup() {
         />
         <Button type="submit" size="lg" className="w-full" loading={submitting}>
           <UserPlus className="h-4 w-4" aria-hidden />
-          Create account
+          Send verification code
         </Button>
       </form>
 

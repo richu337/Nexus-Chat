@@ -1,0 +1,23 @@
+{
+  "name": "nexus-chat-functions",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "serve": "npm run build && firebase emulators:start --only functions",
+    "deploy": "firebase deploy --only functions"
+  },
+  "engines": {
+    "node": "18"
+  },
+  "main": "lib/index.js",
+  "dependencies": {
+    "firebase-admin": "^12.6.0",
+    "firebase-functions": "^6.3.0",
+    "nodemailer": "^6.9.16"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.0",
+    "@types/nodemailer": "^6.4.17",
+    "typescript": "^5.7.0"
+  }
+}

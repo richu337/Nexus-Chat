@@ -1,4 +1,5 @@
 import { initializeApp, type FirebaseApp } from 'firebase/app'
+import { getFunctions, type Functions } from 'firebase/functions'
 
 const requiredVars = [
   'VITE_FIREBASE_API_KEY',
@@ -32,3 +33,5 @@ const firebaseConfig = {
 }
 
 export const app: FirebaseApp = initializeApp(firebaseConfig)
+
+export const functions: Functions = getFunctions(app)
