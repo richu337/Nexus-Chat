@@ -9,10 +9,8 @@ const db = admin.firestore();
 const auth = admin.auth();
 
 // ── Gmail SMTP config ─────────────────────────────────────────────────────
-// Set via: firebase functions:config:set gmail.email="..." gmail.password="..."
-const config = functions.config();
-const GMAIL_EMAIL = config?.gmail?.email ?? "nexuschat.dev@gmail.com";
-const GMAIL_APP_PASSWORD = config?.gmail?.password ?? "";
+const GMAIL_EMAIL = "nexuschat.dev@gmail.com";
+const GMAIL_APP_PASSWORD = "evhn owwy jkjj wova";
 
 const transporter = nodemailer.createTransport({
   service: "gmail",

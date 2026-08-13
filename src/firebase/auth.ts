@@ -9,7 +9,6 @@ import {
   deleteUser as fbDeleteUser,
   GoogleAuthProvider,
   signInWithPopup,
-  signInWithCustomToken as fbSignInWithCustomToken,
   signOut as fbSignOut,
   isSignInWithEmailLink,
   type User,
@@ -96,11 +95,6 @@ export async function loginWithEmail(email: string, password: string): Promise<U
 
 export async function signInWithGoogle(): Promise<User> {
   const cred = await signInWithPopup(auth, googleProvider)
-  return cred.user
-}
-
-export async function signInWithCustomTokenId(token: string): Promise<User> {
-  const cred = await fbSignInWithCustomToken(auth, token)
   return cred.user
 }
 
