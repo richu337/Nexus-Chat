@@ -1,4 +1,4 @@
-import { onCall, HttpsError } from "firebase-functions/v2/https";
+import * as functions from "firebase-functions";
 import * as admin from "firebase-admin";
 import * as nodemailer from "nodemailer";
 import * as crypto from "crypto";
@@ -9,11 +9,10 @@ const db = admin.firestore();
 const auth = admin.auth();
 
 // ── Gmail SMTP config ─────────────────────────────────────────────────────
-// Set these as Firebase environment secrets:
-//   firebase functions:secrets:set GMAIL_EMAIL
-//   firebase functions:secrets:set GMAIL_APP_PASSWORD
-const GMAIL_EMAIL = process.env.GMAIL_EMAIL ?? "nexuschat.dev@gmail.com";
-const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD ?? "";
+// Set via: firebase functions:config:set gmail.email="..." gmail.password="..."
+const config = functions.config();
+const GMAIL_EMAIL = config?.gmail?.email ?? "nexuschat.dev@gmail.com";
+const GMAIL_APP_PASSWORD = config?.gmail?.password ?? "";
 
 const transporter = nodemailer.createTransport({
   service: "gmail",
@@ -33,16 +32,11 @@ function hashOtp(otp: string): string {
 }
 
 // ── sendOtp ────────────────────────────────────────────────────────────────
-export const sendOtp = onCall(
-  {
-    region: "us-central1",
-    timeoutSeconds: 30,
-  },
-  async (request) => {
-    const { email, name } = request.data as { email?: string; name?: string };
+export const sendOtp = functions.https.onCall(async (data, context) => {
+    const { email, name } = data as { email?: string; name?: string };
 
     if (!email || typeof email !== "string") {
-      throw new HttpsError("invalid-argument", "Email is required.");
+      throw new functions.https.HttpsError("invalid-argument", "Email is required.");
     }
 
     const normalizedEmail = email.trim().toLowerCase();
@@ -56,7 +50,7 @@ export const sendOtp = onCall(
       .get();
 
     if (recentOtps.size >= 3) {
-      throw new HttpsError(
+      throw new functions.https.HttpsError(
         "resource-exhausted",
         "Too many OTP requests. Please wait a few minutes and try again."
       );
@@ -101,21 +95,15 @@ export const sendOtp = onCall(
       });
     } catch (err) {
       console.error("Failed to send OTP email:", err);
-      throw new HttpsError("internal", "Failed to send verification email.");
+      throw new functions.https.HttpsError("internal", "Failed to send verification email.");
     }
 
     return { success: true };
-  }
-);
+});
 
 // ── verifyOtp ──────────────────────────────────────────────────────────────
-export const verifyOtp = onCall(
-  {
-    region: "us-central1",
-    timeoutSeconds: 30,
-  },
-  async (request) => {
-    const { email, otp, password, name, username } = request.data as {
+export const verifyOtp = functions.https.onCall(async (data, context) => {
+    const { email, otp, password, name, username } = data as {
       email?: string;
       otp?: string;
       password?: string;
@@ -124,7 +112,7 @@ export const verifyOtp = onCall(
     };
 
     if (!email || !otp || !password || !name || !username) {
-      throw new HttpsError("invalid-argument", "All fields are required.");
+      throw new functions.https.HttpsError("invalid-argument", "All fields are required.");
     }
 
     const normalizedEmail = email.trim().toLowerCase();
@@ -133,7 +121,7 @@ export const verifyOtp = onCall(
     const trimmedUsername = username.trim().toLowerCase();
 
     if (normalizedOtp.length !== 6 || !/^\d{6}$/.test(normalizedOtp)) {
-      throw new HttpsError("invalid-argument", "Invalid OTP format.");
+      throw new functions.https.HttpsError("invalid-argument", "Invalid OTP format.");
     }
 
     // Find the OTP document
@@ -146,7 +134,7 @@ export const verifyOtp = onCall(
       .get();
 
     if (otpQuery.empty) {
-      throw new HttpsError("not-found", "No verification code found. Please request a new one.");
+      throw new functions.https.HttpsError("not-found", "No verification code found. Please request a new one.");
     }
 
     const otpDoc = otpQuery.docs[0];
@@ -155,13 +143,13 @@ export const verifyOtp = onCall(
     // Check expiry
     const expiresAt = otpData.expiresAt as admin.firestore.Timestamp;
     if (expiresAt.toDate() < new Date()) {
-      throw new HttpsError("deadline-exceeded", "This code has expired. Please request a new one.");
+      throw new functions.https.HttpsError("deadline-exceeded", "This code has expired. Please request a new one.");
     }
 
     // Verify hash
     const inputHash = hashOtp(normalizedOtp);
     if (inputHash !== otpData.otpHash) {
-      throw new HttpsError("invalid-argument", "Incorrect code. Please try again.");
+      throw new functions.https.HttpsError("invalid-argument", "Incorrect code. Please try again.");
     }
 
     // Mark OTP as used
@@ -170,7 +158,7 @@ export const verifyOtp = onCall(
     // Check if username is already taken
     const usernameDoc = await db.collection("usernames").doc(trimmedUsername).get();
     if (usernameDoc.exists) {
-      throw new HttpsError("already-exists", "This username is already taken.");
+      throw new functions.https.HttpsError("already-exists", "This username is already taken.");
     }
 
     // Create Firebase Auth account
@@ -185,9 +173,9 @@ export const verifyOtp = onCall(
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("EMAIL_EXISTS")) {
-        throw new HttpsError("already-exists", "An account with this email already exists.");
+        throw new functions.https.HttpsError("already-exists", "An account with this email already exists.");
       }
-      throw new HttpsError("internal", "Failed to create account.");
+      throw new functions.https.HttpsError("internal", "Failed to create account.");
     }
 
     const uid = userRecord.uid;
@@ -224,5 +212,4 @@ export const verifyOtp = onCall(
     const customToken = await auth.createCustomToken(uid);
 
     return { customToken, uid };
-  }
-);
+});
