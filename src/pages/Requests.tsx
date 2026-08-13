@@ -18,7 +18,6 @@ import {
 import type { FriendRequest } from '@/types'
 
 function IncomingRow({ request }: { request: FriendRequest }) {
-  const { user: authUser } = useAuth()
   const { user } = useCurrentUserProfile(request.senderId)
   const { showToast } = useToast()
   const [busy, setBusy] = useState(false)

@@ -2,6 +2,7 @@ import {
   collection,
   doc,
   addDoc,
+  getDoc,
   onSnapshot,
   serverTimestamp,
   query,
@@ -11,13 +12,16 @@ import {
   startAfter,
   getCountFromServer,
   writeBatch,
+  updateDoc,
+  arrayUnion,
+  arrayRemove,
   type Timestamp,
   type QueryDocumentSnapshot,
   type DocumentData,
 } from 'firebase/firestore'
 import { db } from '@/firebase/firestore'
 import { updateDoc as convUpdateDoc, conversationDocRef } from './conversationsShared'
-import type { Message } from '@/types'
+import type { Message, MessageReplyTo, MessageReaction } from '@/types'
 
 const PAGE_SIZE = 40
 
@@ -42,6 +46,11 @@ function parseMessage(docData: QueryDocumentSnapshot<DocumentData>): Message {
     updatedAt: (data.updatedAt as Timestamp | null) ?? null,
     deliveredAt: (data.deliveredAt as Timestamp | null) ?? null,
     readAt: (data.readAt as Timestamp | null) ?? null,
+    replyTo: (data.replyTo as MessageReplyTo | null) ?? null,
+    reactions: (data.reactions as MessageReaction[]) ?? [],
+    edited: data.edited ?? false,
+    deleted: data.deleted ?? false,
+    deletedAt: (data.deletedAt as Timestamp | null) ?? null,
   }
 }
 
@@ -225,4 +234,108 @@ export async function countUnreadMessages(
     if (createdAt > lastRead && data.senderId !== uid) count++
   }
   return count
+}
+
+// ─── Reply ───────────────────────────────────────────────────────────────
+
+export async function replyToMessage(
+  conversationId: string,
+  senderId: string,
+  text: string,
+  replyTo: MessageReplyTo,
+): Promise<Message> {
+  const trimmed = text.trim()
+  if (!trimmed) throw new Error('Message cannot be empty.')
+
+  const now = serverTimestamp()
+  const ref = await addDoc(messagesCollectionRef(conversationId), {
+    senderId,
+    text: trimmed,
+    type: 'text',
+    status: 'sent',
+    createdAt: now,
+    updatedAt: now,
+    deliveredAt: null,
+    readAt: null,
+    replyTo,
+  })
+
+  await convUpdateDoc(conversationDocRef(conversationId), {
+    lastMessage: trimmed,
+    lastMessageType: 'text',
+    lastMessageSenderId: senderId,
+    lastMessageAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  })
+
+  return {
+    id: ref.id,
+    conversationId,
+    senderId,
+    text: trimmed,
+    type: 'text',
+    status: 'sent',
+    createdAt: null,
+    updatedAt: null,
+    deliveredAt: null,
+    readAt: null,
+    replyTo,
+  }
+}
+
+// ─── Edit ────────────────────────────────────────────────────────────────
+
+export async function editMessage(
+  conversationId: string,
+  messageId: string,
+  newText: string,
+): Promise<void> {
+  const trimmed = newText.trim()
+  if (!trimmed) throw new Error('Message cannot be empty.')
+
+  await updateDoc(messageDocRef(conversationId, messageId), {
+    text: trimmed,
+    edited: true,
+    updatedAt: serverTimestamp(),
+  })
+}
+
+// ─── Delete ──────────────────────────────────────────────────────────────
+
+export async function deleteMessage(
+  conversationId: string,
+  messageId: string,
+): Promise<void> {
+  await updateDoc(messageDocRef(conversationId, messageId), {
+    deleted: true,
+    deletedAt: serverTimestamp(),
+    text: '',
+    updatedAt: serverTimestamp(),
+  })
+}
+
+// ─── Reactions ───────────────────────────────────────────────────────────
+
+export async function toggleReaction(
+  conversationId: string,
+  messageId: string,
+  uid: string,
+  emoji: string,
+): Promise<void> {
+  const snap = await getDoc(messageDocRef(conversationId, messageId))
+  if (!snap.exists()) return
+
+  const data = snap.data()
+  const reactions = (data.reactions as MessageReaction[]) ?? []
+  const existing = reactions.find((r) => r.uid === uid && r.emoji === emoji)
+
+  if (existing) {
+    await updateDoc(messageDocRef(conversationId, messageId), {
+      reactions: arrayRemove({ uid, emoji, createdAt: existing.createdAt }),
+    })
+  } else {
+    await updateDoc(messageDocRef(conversationId, messageId), {
+      reactions: arrayUnion({ uid, emoji, createdAt: serverTimestamp() }),
+    })
+  }
 }

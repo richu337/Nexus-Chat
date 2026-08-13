@@ -89,6 +89,18 @@ export interface Conversation {
   unreadCount: Record<string, number>
 }
 
+export interface MessageReplyTo {
+  messageId: string
+  senderId: string
+  text: string
+}
+
+export interface MessageReaction {
+  uid: string
+  emoji: string
+  createdAt: Timestamp | null
+}
+
 export interface Message {
   id: string
   conversationId: string
@@ -100,6 +112,11 @@ export interface Message {
   updatedAt: Timestamp | null
   deliveredAt: Timestamp | null
   readAt: Timestamp | null
+  replyTo?: MessageReplyTo | null
+  reactions?: MessageReaction[]
+  edited?: boolean
+  deleted?: boolean
+  deletedAt?: Timestamp | null
 }
 
 // ─── Misc ──────────────────────────────────────────────────────────────────
