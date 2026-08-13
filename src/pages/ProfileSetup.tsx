@@ -129,7 +129,7 @@ export default function ProfileSetup() {
           <Input
             id="setup-name"
             label="Display name"
-            placeholder="Rayhan Jaleel"
+            placeholder="Your display name"
             value={name}
             onChange={(e) => setName(e.target.value)}
             error={errors.name}
