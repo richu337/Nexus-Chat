@@ -173,17 +173,25 @@ service cloud.firestore {
           && request.resource.data.text.size() > 0
           && request.resource.data.text.size() <= 4000
           && !isBlockedBetween(convo().members[0], convo().members[1]);
-        // Sender may update their own message metadata; recipients may mark
-        // delivered/read. Only status metadata fields may change, and senderId
-        // and text are immutable.
+        // Status update (delivered / read) — any member can update.
         allow update: if isSignedIn()
           && convo() != null
           && uid() in convo().members
           && request.resource.data.senderId == resource.data.senderId
-          && request.resource.data.text == resource.data.text
           && request.resource.data.type == resource.data.type
           && request.resource.data.diff(resource.data).affectedKeys()
              .hasOnly(['status', 'deliveredAt', 'readAt', 'updatedAt']);
+
+        // Sender-only: edit text, delete (soft), toggle reactions.
+        allow update: if isSignedIn()
+          && convo() != null
+          && uid() in convo().members
+          && resource.data.senderId == uid()
+          && request.resource.data.senderId == resource.data.senderId
+          && request.resource.data.type == resource.data.type
+          && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['text', 'edited', 'deleted', 'deletedAt', 'reactions', 'updatedAt']);
+
         allow delete: if false;
       }
     }

@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
-import { ArrowLeft, Send, MoreVertical, Phone, Video, Check, CheckCheck } from 'lucide-react'
+import {
+  ArrowLeft, Send, MoreVertical, Phone, Video,
+  Reply, Pencil, Trash2, SmilePlus, X, Check, CheckCheck,
+} from 'lucide-react'
 import { Timestamp } from 'firebase/firestore'
 import { useAuth } from '@/hooks/useAuth'
 import { useConversation } from '@/hooks/useConversation'
@@ -15,6 +18,10 @@ import {
   subscribeToMessages,
   loadOlderMessages,
   sendMessage,
+  replyToMessage,
+  editMessage,
+  deleteMessage,
+  toggleReaction,
   markMessagesDelivered,
   markMessagesRead,
 } from '@/services/messages'
@@ -23,7 +30,9 @@ import { notifyNewMessage } from '@/services/notifications'
 import { otherMember } from '@/utils'
 import { formatMessageTime } from '@/utils/time'
 import { validateMessage } from '@/utils/validators'
-import type { Message } from '@/types'
+import type { Message, MessageReplyTo } from '@/types'
+
+const EMOJI_OPTIONS = ['👍', '❤️', '😂', '😮', '😢', '😡', '🎉', '🔥']
 
 function MessageStatusIcon({ message, isNew }: { message: Message; isNew?: boolean }) {
   if (message.status === 'sending') {
@@ -62,6 +71,84 @@ function MessageStatusIcon({ message, isNew }: { message: Message; isNew?: boole
   )
 }
 
+interface ContextMenuProps {
+  message: Message
+  me: string
+  position: { x: number; y: number }
+  onClose: () => void
+  onReply: (msg: Message) => void
+  onEdit: (msg: Message) => void
+  onDelete: (msg: Message) => void
+  onReact: (msg: Message, emoji: string) => void
+}
+
+function ContextMenu({ message, me, position, onClose, onReply, onEdit, onDelete, onReact }: ContextMenuProps) {
+  const mine = message.senderId === me
+  const [showEmoji, setShowEmoji] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) onClose()
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [onClose])
+
+  return (
+    <div className="fixed inset-0 z-50" onClick={onClose}>
+      <div
+        ref={menuRef}
+        onClick={(e) => e.stopPropagation()}
+        className="absolute min-w-[160px] rounded-xl bg-white p-1.5 shadow-lg ring-1 ring-slate-200 dark:bg-slate-800 dark:ring-slate-700"
+        style={{ left: Math.min(position.x, window.innerWidth - 180), top: Math.min(position.y, window.innerHeight - 200) }}
+      >
+        <button
+          onClick={() => { onReply(message); onClose() }}
+          className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700"
+        >
+          <Reply className="h-4 w-4" /> Reply
+        </button>
+        <button
+          onClick={() => setShowEmoji(!showEmoji)}
+          className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700"
+        >
+          <SmilePlus className="h-4 w-4" /> React
+        </button>
+        {showEmoji && (
+          <div className="flex gap-1 px-2 pb-1">
+            {EMOJI_OPTIONS.map((emoji) => (
+              <button
+                key={emoji}
+                onClick={() => { onReact(message, emoji); onClose() }}
+                className="h-8 w-8 rounded-lg text-lg hover:bg-slate-100 dark:hover:bg-slate-700"
+              >
+                {emoji}
+              </button>
+            ))}
+          </div>
+        )}
+        {mine && (
+          <>
+            <button
+              onClick={() => { onEdit(message); onClose() }}
+              className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700"
+            >
+              <Pencil className="h-4 w-4" /> Edit
+            </button>
+            <button
+              onClick={() => { onDelete(message); onClose() }}
+              className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/40"
+            >
+              <Trash2 className="h-4 w-4" /> Delete
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function Chat() {
   const { conversationId = '' } = useParams()
   const { user } = useAuth()
@@ -81,6 +168,11 @@ export default function Chat() {
   const [sending, setSending] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [hasOlder, setHasOlder] = useState(false)
+  const [replyTo, setReplyTo] = useState<MessageReplyTo | null>(null)
+  const [editingMsg, setEditingMsg] = useState<Message | null>(null)
+  const [editText, setEditText] = useState('')
+  const [contextMenu, setContextMenu] = useState<{ message: Message; x: number; y: number } | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<Message | null>(null)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -229,15 +321,37 @@ export default function Chat() {
     shouldStickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120
   }
 
-  // ── Send message ─────────────────────────────────────────────────────────
+  // ── Send / Reply / Edit ──────────────────────────────────────────────────
   const handleSend = useCallback(async () => {
     if (!conversationId || !me || !senderProfile) return
     const text = input.trim()
     const err = validateMessage(text)
     if (err || sending) return
 
+    // If editing, save the edit instead
+    if (editingMsg) {
+      const origText = editingMsg.text
+      if (text === origText) { setEditingMsg(null); setInput(''); return }
+      try {
+        await editMessage(conversationId, editingMsg.id, text)
+        setMessages((prev) => prev.map((m) =>
+          m.id === editingMsg.id ? { ...m, text, edited: true } : m,
+        ))
+        setEditingMsg(null)
+        setInput('')
+        showToast('Message edited.', 'success')
+      } catch {
+        showToast('Could not edit message.', 'error')
+      }
+      return
+    }
+
     setSending(true)
     sendingRef.current = true
+
+    // Build replyTo metadata if replying
+    const replyMeta = replyTo ? { ...replyTo } : null
+
     const optimistic: Message = {
       id: `local-${Date.now()}`,
       conversationId,
@@ -249,15 +363,22 @@ export default function Chat() {
       updatedAt: new Timestamp(Date.now() / 1000, 0),
       deliveredAt: null,
       readAt: null,
+      replyTo: replyMeta,
     }
     animatingRef.current.add(optimistic.id)
     setMessages((prev) => [...prev, optimistic])
     setInput('')
+    setReplyTo(null)
     shouldStickRef.current = true
     inputRef.current?.focus()
 
     try {
-      const saved = await sendMessage(conversationId, me, text)
+      let saved: Message
+      if (replyMeta) {
+        saved = await replyToMessage(conversationId, me, text, replyMeta)
+      } else {
+        saved = await sendMessage(conversationId, me, text)
+      }
       animatingRef.current.add(saved.id)
       animatingRef.current.delete(optimistic.id)
       setMessages((prev) => {
@@ -266,7 +387,6 @@ export default function Chat() {
       })
       setTimeout(() => animatingRef.current.delete(saved.id), 350)
       void stopTyping(conversationId, me)
-      // Best-effort push notification.
       if (otherId && otherUser) {
         void notifyNewMessage({
           sender: senderProfile,
@@ -286,12 +406,50 @@ export default function Chat() {
       sendingRef.current = false
       setSending(false)
     }
-  }, [conversationId, me, input, sending, senderProfile, otherId, otherUser, showToast])
+  }, [conversationId, me, input, sending, senderProfile, otherId, otherUser, showToast, replyTo, editingMsg])
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       void handleSend()
+    }
+    if (e.key === 'Escape' && editingMsg) {
+      setEditingMsg(null)
+      setInput('')
+    }
+  }
+
+  const handleContextMenu = (e: React.MouseEvent, msg: Message) => {
+    e.preventDefault()
+    setContextMenu({ message: msg, x: e.clientX, y: e.clientY })
+  }
+
+  const handleStartEdit = (msg: Message) => {
+    setEditingMsg(msg)
+    setInput(msg.text)
+    setReplyTo(null)
+    inputRef.current?.focus()
+  }
+
+  const handleDelete = async (msg: Message) => {
+    if (!conversationId) return
+    try {
+      await deleteMessage(conversationId, msg.id)
+      setMessages((prev) => prev.map((m) =>
+        m.id === msg.id ? { ...m, deleted: true, text: '' } : m,
+      ))
+      showToast('Message deleted.', 'success')
+    } catch {
+      showToast('Could not delete message.', 'error')
+    }
+  }
+
+  const handleReact = async (msg: Message, emoji: string) => {
+    if (!conversationId || !me) return
+    try {
+      await toggleReaction(conversationId, msg.id, me, emoji)
+    } catch {
+      showToast('Could not add reaction.', 'error')
     }
   }
 
@@ -400,6 +558,27 @@ export default function Chat() {
               (messages[idx - 1]?.senderId !== msg.senderId) ||
               ((messages[idx - 1]?.createdAt?.toMillis() ?? 0) < (msg.createdAt?.toMillis() ?? 0) - 5 * 60_000)
             const isNew = animatingRef.current.has(msg.id)
+            const isEditing = editingMsg?.id === msg.id
+
+            if (msg.deleted) {
+              return (
+                <div key={msg.id}>
+                  {showTime && msg.createdAt && (
+                    <div className="my-3 flex justify-center">
+                      <span className="rounded-full bg-slate-200/70 px-3 py-1 text-[11px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                        {formatMessageTime(msg.createdAt)}
+                      </span>
+                    </div>
+                  )}
+                  <div className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
+                    <p className="max-w-[80%] px-3.5 py-2 text-sm italic text-slate-400 dark:text-slate-500">
+                      This message was deleted.
+                    </p>
+                  </div>
+                </div>
+              )
+            }
+
             return (
               <div key={msg.id}>
                 {showTime && msg.createdAt && (
@@ -418,15 +597,96 @@ export default function Chat() {
                         ? 'rounded-br-md bg-indigo-600 text-white'
                         : 'rounded-bl-md bg-white text-slate-800 shadow-sm ring-1 ring-slate-200 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700'
                     }`}
+                    onContextMenu={(e) => handleContextMenu(e, msg)}
                   >
-                    <span className="whitespace-pre-wrap break-words">{msg.text}</span>
-                    {mine && (
-                      <span className="ml-2 inline-flex items-center">
-                        <MessageStatusIcon message={msg} isNew={isNew} />
+                    {/* Reply quote */}
+                    {msg.replyTo && (
+                      <div className={`mb-1.5 rounded-lg border-l-2 px-2.5 py-1 text-xs ${
+                        mine
+                          ? 'border-white/40 bg-white/10 text-white/70'
+                          : 'border-indigo-400 bg-indigo-50 text-slate-500 dark:bg-indigo-950/30 dark:text-slate-400'
+                      }`}>
+                        <p className="font-medium">{msg.replyTo.senderId === me ? 'You' : otherUser?.name?.split(' ')[0]}</p>
+                        <p className="truncate">{msg.replyTo.text}</p>
+                      </div>
+                    )}
+
+                    {/* Message text or edit input */}
+                    {isEditing ? (
+                      <div className="flex flex-col gap-1.5">
+                        <textarea
+                          value={editText}
+                          onChange={(e) => setEditText(e.target.value)}
+                          rows={1}
+                          className="w-full resize-none rounded-lg bg-white/10 px-2 py-1 text-sm text-white outline-none ring-1 ring-white/20 focus:ring-white/40"
+                          autoFocus
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                              e.preventDefault()
+                              void handleSend()
+                            }
+                            if (e.key === 'Escape') {
+                              setEditingMsg(null)
+                              setInput('')
+                            }
+                          }}
+                        />
+                        <div className="flex gap-1.5">
+                          <button
+                            onClick={() => { setEditingMsg(null); setInput('') }}
+                            className="rounded-md px-2 py-0.5 text-xs text-white/60 hover:text-white/80"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            onClick={() => void handleSend()}
+                            className="rounded-md bg-white/20 px-2 py-0.5 text-xs font-medium text-white hover:bg-white/30"
+                          >
+                            Save
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <span className="whitespace-pre-wrap break-words">{msg.text}</span>
+                    )}
+
+                    {/* Edited indicator + status */}
+                    {!isEditing && (
+                      <span className="ml-2 inline-flex items-center gap-1">
+                        {msg.edited && <span className="text-[10px] opacity-60">(edited)</span>}
+                        {mine && <MessageStatusIcon message={msg} isNew={isNew} />}
                       </span>
                     )}
                   </div>
                 </div>
+
+                {/* Reactions */}
+                {msg.reactions && msg.reactions.length > 0 && (
+                  <div className={`flex flex-wrap gap-1 mt-0.5 ${mine ? 'justify-end' : 'justify-start'}`}>
+                    {Object.entries(
+                      msg.reactions.reduce<Record<string, number>>((acc, r) => {
+                        acc[r.emoji] = (acc[r.emoji] ?? 0) + 1
+                        return acc
+                      }, {}),
+                    ).map(([emoji, count]) => {
+                      const myReact = msg.reactions!.some((r) => r.emoji === emoji && r.uid === me)
+                      return (
+                        <button
+                          key={emoji}
+                          onClick={() => handleReact(msg, emoji)}
+                          className={`inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-xs ring-1 transition-colors ${
+                            myReact
+                              ? 'bg-indigo-100 ring-indigo-300 text-indigo-700 dark:bg-indigo-900/40 dark:ring-indigo-600 dark:text-indigo-300'
+                              : 'bg-slate-100 ring-slate-200 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:ring-slate-700 dark:text-slate-400'
+                          }`}
+                        >
+                          <span>{emoji}</span>
+                          {count > 1 && <span>{count}</span>}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
             )
           })}
@@ -436,6 +696,33 @@ export default function Chat() {
 
       {/* Composer */}
       <div className="border-t border-slate-200 bg-white px-3 py-3 pb-safe dark:border-slate-800 dark:bg-slate-900">
+        {/* Reply preview */}
+        {replyTo && (
+          <div className="mb-2 flex items-center gap-2 rounded-lg bg-indigo-50 px-3 py-2 dark:bg-indigo-950/30">
+            <Reply className="h-4 w-4 shrink-0 text-indigo-500" />
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-medium text-indigo-600 dark:text-indigo-400">
+                Replying to {replyTo.senderId === me ? 'yourself' : otherUser?.name?.split(' ')[0]}
+              </p>
+              <p className="truncate text-xs text-slate-500 dark:text-slate-400">{replyTo.text}</p>
+            </div>
+            <button onClick={() => setReplyTo(null)} className="shrink-0 text-slate-400 hover:text-slate-600">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        )}
+
+        {/* Edit banner */}
+        {editingMsg && (
+          <div className="mb-2 flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 dark:bg-amber-950/30">
+            <Pencil className="h-4 w-4 shrink-0 text-amber-500" />
+            <p className="flex-1 text-xs font-medium text-amber-600 dark:text-amber-400">Editing message</p>
+            <button onClick={() => { setEditingMsg(null); setInput('') }} className="shrink-0 text-slate-400 hover:text-slate-600">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        )}
+
         <div className="flex items-end gap-2">
           <button
             className="hidden h-11 w-11 shrink-0 items-center justify-center rounded-xl text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 sm:flex"
@@ -453,7 +740,7 @@ export default function Chat() {
             onChange={(e) => onInputChange(e.target.value)}
             onKeyDown={handleKeyDown}
             rows={1}
-            placeholder="Type a message…"
+            placeholder={editingMsg ? 'Edit message…' : 'Type a message…'}
             className="max-h-32 min-h-11 flex-1 resize-none rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm text-slate-900 outline-none transition-colors placeholder:text-slate-400 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
           />
 
@@ -467,6 +754,57 @@ export default function Chat() {
           </button>
         </div>
       </div>
+
+      {/* Context menu */}
+      {contextMenu && (
+        <ContextMenu
+          message={contextMenu.message}
+          me={me}
+          position={{ x: contextMenu.x, y: contextMenu.y }}
+          onClose={() => setContextMenu(null)}
+          onReply={(msg) => {
+            setReplyTo({
+              messageId: msg.id,
+              senderId: msg.senderId,
+              text: msg.text,
+            })
+            setEditingMsg(null)
+            inputRef.current?.focus()
+          }}
+          onEdit={handleStartEdit}
+          onDelete={(msg) => setDeleteTarget(msg)}
+          onReact={handleReact}
+        />
+      )}
+
+      {/* Delete confirmation dialog */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setDeleteTarget(null)}>
+          <div
+            className="mx-4 w-full max-w-sm rounded-2xl bg-white p-5 shadow-xl dark:bg-slate-800"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Delete message?</h3>
+            <p className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+              This action cannot be undone. The message will be removed for everyone.
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                onClick={() => setDeleteTarget(null)}
+                className="rounded-xl px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => { void handleDelete(deleteTarget); setDeleteTarget(null) }}
+                className="rounded-xl bg-rose-600 px-4 py-2 text-sm font-medium text-white hover:bg-rose-500"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
