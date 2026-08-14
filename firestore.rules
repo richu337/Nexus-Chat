@@ -35,6 +35,12 @@ service cloud.firestore {
       return exists(/databases/$(database)/documents/friendships/$(id1 + '_' + id2));
     }
 
+    function isAdmin() {
+      return isSignedIn()
+        && get(/databases/$(database)/documents/users/$(uid())) != null
+        && get(/databases/$(database)/documents/users/$(uid())).data.role == 'admin';
+    }
+
     // ── users ──────────────────────────────────────────────────────────────
     match /users/{userId} {
       allow read: if isSignedIn();
@@ -194,6 +200,25 @@ service cloud.firestore {
 
         allow delete: if false;
       }
+    }
+
+    // ── announcements ─────────────────────────────────────────────────────
+    match /announcements/{announcementId} {
+      // All signed-in users can read announcements.
+      allow read: if isSignedIn();
+      // Only admins can create announcements.
+      allow create: if isAdmin()
+        && request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && request.resource.data.title.size() <= 200
+        && request.resource.data.body is string
+        && request.resource.data.body.size() > 0
+        && request.resource.data.body.size() <= 5000
+        && request.resource.data.senderId == uid();
+      // Only the admin who created it can delete it.
+      allow delete: if isAdmin()
+        && resource.data.senderId == uid();
+      allow update: if false;
     }
   }
 }

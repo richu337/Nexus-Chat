@@ -160,3 +160,39 @@ export async function sendFriendRequestAcceptedNotification({
   })
 }
 
+// ── Announcement broadcast ──────────────────────────────────────────────────
+
+export async function broadcastAnnouncement({ title, body, senderName }) {
+  // Collect all device tokens from all users.
+  const devicesSnap = await getDb().collection('devices').get()
+  const allTokens = []
+
+  for (const userDoc of devicesSnap.docs) {
+    const tokensSnap = await userDoc.ref.collection('tokens').get()
+    for (const t of tokensSnap.docs) {
+      const token = t.data().token
+      if (token) allTokens.push(token)
+    }
+  }
+
+  if (allTokens.length === 0) return
+
+  // FCM has a 500-token limit per multicast; batch them.
+  const BATCH_SIZE = 500
+  for (let i = 0; i < allTokens.length; i += BATCH_SIZE) {
+    const batch = allTokens.slice(i, i + BATCH_SIZE)
+    const message = {
+      tokens: batch,
+      notification: {
+        title: `📢 ${senderName || 'Admin'}`,
+        body: `${title}\n\n${body}`,
+      },
+      data: { kind: 'announcement' },
+      android: { priority: 'high' },
+      apns: { payload: { aps: { sound: 'default' } } },
+    }
+
+    await admin.messaging().sendEachForMulticast(message).catch(() => {})
+  }
+}
+

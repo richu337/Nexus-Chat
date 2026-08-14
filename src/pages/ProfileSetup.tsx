@@ -139,7 +139,7 @@ export default function ProfileSetup() {
             <Input
               id="setup-username"
               label="Username"
-              placeholder="rayhan"
+              placeholder="Choose a username"
               value={username}
               onChange={(e) => setUsername(e.target.value.toLowerCase())}
               error={errors.username}

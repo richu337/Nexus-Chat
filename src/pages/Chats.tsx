@@ -7,6 +7,7 @@ import { useConversations } from '@/hooks/useConversations'
 import { Avatar } from '@/components/common/Avatar'
 import { ListSkeleton } from '@/components/common/Skeleton'
 import { EmptyState } from '@/components/common/EmptyState'
+import { AnnouncementBanner } from '@/components/announcements/AnnouncementBanner'
 import { formatTime } from '@/utils/time'
 import { otherMember } from '@/utils'
 import { usePresence, useWarmPresence } from '@/hooks/usePresence'
@@ -104,6 +105,8 @@ export default function Chats() {
           />
         </div>
       </header>
+
+      <AnnouncementBanner />
 
       <div className="flex-1 overflow-y-auto">
         {loading ? (

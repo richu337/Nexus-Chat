@@ -10,6 +10,7 @@ export interface UserProfile {
   email: string
   photoURL: string | null
   bio: string | null
+  role: UserRole
   online: boolean
   lastSeen: Timestamp | null
   createdAt: Timestamp | null
@@ -69,6 +70,20 @@ export type RelationshipStatus =
   | 'blocked-them'
   | 'blocked-by'
   | 'blocked-both'
+
+// ─── Admin / Announcements ─────────────────────────────────────────────────
+
+export type UserRole = 'user' | 'admin'
+
+export interface Announcement {
+  id: string
+  title: string
+  body: string
+  senderId: string
+  senderName: string
+  createdAt: Timestamp | null
+  updatedAt: Timestamp | null
+}
 
 // ─── Conversations ─────────────────────────────────────────────────────────
 

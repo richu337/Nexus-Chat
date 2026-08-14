@@ -95,6 +95,7 @@ export async function createProfile(input: CreateProfileInput): Promise<UserProf
         email: user.email ?? '',
         photoURL: input.photoURL ?? null,
         bio: input.bio?.trim() || null,
+        role: 'user',
         online: true,
         lastSeen: now,
         createdAt: now,

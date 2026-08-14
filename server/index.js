@@ -10,6 +10,7 @@ import {
   sendMessageNotification,
   sendFriendRequestNotification,
   sendFriendRequestAcceptedNotification,
+  broadcastAnnouncement,
 } from './services.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -61,6 +62,15 @@ async function requireAuth(req, res, next) {
   } catch {
     return res.status(401).json({ error: 'Invalid or expired token.' })
   }
+}
+
+async function requireAdmin(req, res, next) {
+  const db = admin.firestore()
+  const userSnap = await db.collection('users').doc(req.user.uid).get()
+  if (!userSnap.exists || userSnap.data().role !== 'admin') {
+    return res.status(403).json({ error: 'Admin access required.' })
+  }
+  next()
 }
 
 // ── Routes ─────────────────────────────────────────────────────────────────
@@ -150,6 +160,30 @@ app.post('/api/notify', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('[notify]', err)
     return res.status(500).json({ error: 'Could not send notification.' })
+  }
+})
+
+// Broadcast an announcement to all users via FCM. Admin-only.
+app.post('/api/announce', requireAuth, requireAdmin, async (req, res) => {
+  const { title, body, senderName } = req.body ?? {}
+
+  if (!title || typeof title !== 'string' || title.trim().length === 0) {
+    return res.status(400).json({ error: 'title is required.' })
+  }
+  if (!body || typeof body !== 'string' || body.trim().length === 0) {
+    return res.status(400).json({ error: 'body is required.' })
+  }
+
+  try {
+    await broadcastAnnouncement({
+      title: title.trim(),
+      body: body.trim(),
+      senderName: senderName || 'Admin',
+    })
+    return res.json({ ok: true })
+  } catch (err) {
+    console.error('[announce]', err)
+    return res.status(500).json({ error: 'Could not broadcast announcement.' })
   }
 })
 

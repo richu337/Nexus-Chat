@@ -7,6 +7,7 @@ import {
   Settings,
   Search,
   LogOut,
+  Megaphone,
 } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import { useCurrentUserProfile } from '@/hooks/useUserProfile'
@@ -83,6 +84,21 @@ export default function AppShell() {
               {label}
             </NavLink>
           ))}
+          {profile?.role === 'admin' && (
+            <NavLink
+              to="/admin"
+              className={({ isActive }) =>
+                `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${
+                  isActive
+                    ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-300'
+                    : 'text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800'
+                }`
+              }
+            >
+              <Megaphone className="h-5 w-5" aria-hidden />
+              Admin
+            </NavLink>
+          )}
         </nav>
 
         <div className="border-t border-slate-200 p-3 dark:border-slate-800">
@@ -158,6 +174,21 @@ export default function AppShell() {
             {label}
           </NavLink>
         ))}
+        {profile?.role === 'admin' && (
+          <NavLink
+            to="/admin"
+            className={({ isActive }) =>
+              `flex flex-1 flex-col items-center gap-1 py-2.5 text-[11px] font-medium ${
+                isActive
+                  ? 'text-indigo-600 dark:text-indigo-400'
+                  : 'text-slate-500 dark:text-slate-400'
+              }`
+            }
+          >
+            <Megaphone className="h-5 w-5" aria-hidden />
+            Admin
+          </NavLink>
+        )}
       </nav>
 
       {/* Content */}

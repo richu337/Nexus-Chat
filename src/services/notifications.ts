@@ -156,3 +156,36 @@ export async function resolveConversationId(
   const convo = await getConversation(conversationId)
   return convo?.id ?? null
 }
+
+/**
+ * Broadcasts an announcement push notification to all users via the relay.
+ * Only callable by admin users (the relay verifies admin role server-side).
+ */
+export async function sendAnnouncementNotification(opts: {
+  title: string
+  body: string
+  senderName: string
+}): Promise<boolean> {
+  if (!isRelayConfigured()) return false
+
+  const token = await getIdToken()
+  if (!token) return false
+
+  try {
+    const res = await fetch(`${RELAY_URL}/api/announce`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        title: opts.title,
+        body: opts.body,
+        senderName: opts.senderName,
+      }),
+    })
+    return res.ok
+  } catch {
+    return false
+  }
+}

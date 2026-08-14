@@ -5,6 +5,7 @@ import { useCurrentUserProfile } from '@/hooks/useUserProfile'
 import { getFirebaseConfigError } from '@/firebase/config'
 import { startPresence, stopPresence } from '@/services/presence'
 import { NotificationInit } from '@/components/notifications/NotificationInit'
+import { RequireAdmin } from '@/components/admin/RequireAdmin'
 import AppShell from '@/components/layout/AppShell'
 import { Spinner } from '@/components/common/Button'
 
@@ -18,6 +19,7 @@ const Requests = lazy(() => import('@/pages/Requests'))
 const Search = lazy(() => import('@/pages/Search'))
 const UserProfile = lazy(() => import('@/pages/UserProfile'))
 const Settings = lazy(() => import('@/pages/Settings'))
+const Admin = lazy(() => import('@/pages/Admin'))
 
 function FullScreenLoader({ message = 'Loading…' }: { message?: string }) {
   return (
@@ -154,6 +156,14 @@ function AppRoutes() {
         <Route path="/search" element={<LazyPage><Search /></LazyPage>} />
         <Route path="/user/:userId" element={<LazyPage><UserProfile /></LazyPage>} />
         <Route path="/settings" element={<LazyPage><Settings /></LazyPage>} />
+        <Route
+          path="/admin"
+          element={
+            <RequireAdmin>
+              <LazyPage><Admin /></LazyPage>
+            </RequireAdmin>
+          }
+        />
       </Route>
       <Route path="*" element={<Navigate to={location.pathname === '/setup' ? '/setup' : '/'} replace />} />
     </Routes>
