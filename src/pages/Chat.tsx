@@ -559,6 +559,9 @@ export default function Chat() {
               ((messages[idx - 1]?.createdAt?.toMillis() ?? 0) < (msg.createdAt?.toMillis() ?? 0) - 5 * 60_000)
             const isNew = animatingRef.current.has(msg.id)
             const isEditing = editingMsg?.id === msg.id
+            const isLastSent = mine && idx === messages.length - 1
+            const isLastSentByMe = mine && messages.slice(idx + 1).every((m) => m.senderId !== me)
+            const showSeen = isLastSentByMe && msg.status === 'read'
 
             if (msg.deleted) {
               return (
@@ -659,6 +662,15 @@ export default function Chat() {
                     )}
                   </div>
                 </div>
+
+                {/* Seen indicator */}
+                {showSeen && (
+                  <div className="mt-0.5 flex justify-end pr-1">
+                    <span className="text-[10px] font-medium text-indigo-500 dark:text-indigo-400">
+                      Seen
+                    </span>
+                  </div>
+                )}
 
                 {/* Reactions */}
                 {msg.reactions && msg.reactions.length > 0 && (

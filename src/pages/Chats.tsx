@@ -12,6 +12,7 @@ import { formatTime } from '@/utils/time'
 import { otherMember } from '@/utils'
 import { usePresence, useWarmPresence } from '@/hooks/usePresence'
 import { reconcileUnreadCounts } from '@/services/conversations'
+import { subscribeToTyping } from '@/services/typing'
 import type { Conversation } from '@/types'
 
 function ConversationRow({ conversation, me, onOpen }: {
@@ -23,11 +24,22 @@ function ConversationRow({ conversation, me, onOpen }: {
   const { user } = useCurrentUserProfile(friendId)
   const { online } = usePresence(friendId)
   const unread = conversation.unreadCount?.[me] ?? 0
+  const [typing, setTyping] = useState(false)
+
+  useEffect(() => {
+    if (!friendId || !conversation.id) return
+    const unsub = subscribeToTyping(conversation.id, friendId, (active) => {
+      setTyping(active)
+    })
+    return unsub
+  }, [friendId, conversation.id])
 
   const isMine = conversation.lastMessageSenderId === me
-  const preview = conversation.lastMessage
-    ? (isMine ? 'You: ' : '') + conversation.lastMessage
-    : 'Say hello 👋'
+  const preview = typing
+    ? null
+    : conversation.lastMessage
+      ? (isMine ? 'You: ' : '') + conversation.lastMessage
+      : 'Say hello 👋'
 
   return (
     <button
@@ -45,7 +57,13 @@ function ConversationRow({ conversation, me, onOpen }: {
           </span>
         </div>
         <div className="flex items-center justify-between gap-2">
-          <span className="truncate text-sm text-slate-500 dark:text-slate-400">{preview}</span>
+          {typing ? (
+            <span className="truncate text-sm font-medium text-indigo-500 dark:text-indigo-400">
+              {user?.name?.split(' ')[0] ?? 'They'} are typing…
+            </span>
+          ) : (
+            <span className="truncate text-sm text-slate-500 dark:text-slate-400">{preview}</span>
+          )}
           {unread > 0 && (
             <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-indigo-600 px-1.5 text-[11px] font-bold text-white">
               {unread > 99 ? '99+' : unread}
