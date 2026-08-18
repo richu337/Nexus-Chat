@@ -31,7 +31,7 @@ export default function Search() {
         const found = await searchUsersByUsername(q)
         setResults(
           found.filter(
-            (u) => u.uid !== me && u.settings?.profileDiscoverable !== false,
+            (u) => u.uid !== me && u.settings?.profileDiscoverable !== false && !u.banned,
           ),
         )
         setSearched(true)

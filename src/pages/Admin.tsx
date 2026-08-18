@@ -1,14 +1,19 @@
 import { useState } from 'react'
-import { Megaphone, Trash2, Send } from 'lucide-react'
+import { Megaphone, Trash2, Send, Search, Ban, CheckCircle } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import { useCurrentUserProfile } from '@/hooks/useUserProfile'
 import { useAnnouncements } from '@/hooks/useAnnouncements'
 import { createAnnouncement, deleteAnnouncement } from '@/services/announcements'
 import { sendAnnouncementNotification } from '@/services/notifications'
+import { searchUsersByUsername } from '@/services/users'
+import { banUser, unbanUser, getBannedUsers } from '@/services/bans'
 import { Button } from '@/components/common/Button'
 import { Input, Textarea } from '@/components/common/Input'
 import { useToast } from '@/hooks/useToast'
 import { formatTime } from '@/utils/time'
+import { debounce } from '@/utils/time'
+import { useRef, useEffect } from 'react'
+import type { UserProfile } from '@/types'
 
 export default function Admin() {
   const { user } = useAuth()
@@ -20,6 +25,80 @@ export default function Admin() {
   const [body, setBody] = useState('')
   const [sending, setSending] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+
+  // Ban management state
+  const [banQuery, setBanQuery] = useState('')
+  const [banResults, setBanResults] = useState<UserProfile[]>([])
+  const [bannedUsers, setBannedUsers] = useState<{ uid: string; name: string; username: string; email: string }[]>([])
+  const [searchingBan, setSearchingBan] = useState(false)
+  const [loadingBanned, setLoadingBanned] = useState(true)
+  const [busyBanUid, setBusyBanUid] = useState<string | null>(null)
+
+  // Load banned users on mount
+  useEffect(() => {
+    void loadBannedUsers()
+  }, [])
+
+  async function loadBannedUsers() {
+    setLoadingBanned(true)
+    try {
+      const list = await getBannedUsers()
+      setBannedUsers(list)
+    } catch {
+      // ignore
+    } finally {
+      setLoadingBanned(false)
+    }
+  }
+
+  const runBanSearch = useRef(
+    debounce(async (q: string) => {
+      if (!q.trim()) {
+        setBanResults([])
+        return
+      }
+      setSearchingBan(true)
+      try {
+        const found = await searchUsersByUsername(q)
+        setBanResults(found.filter((u) => u.uid !== user?.uid))
+      } catch {
+        showToast('Search failed.', 'error')
+      } finally {
+        setSearchingBan(false)
+      }
+    }, 400),
+  )
+
+  useEffect(() => {
+    void runBanSearch.current(banQuery)
+  }, [banQuery, runBanSearch])
+
+  async function handleBan(uid: string) {
+    setBusyBanUid(uid)
+    try {
+      await banUser(uid)
+      showToast('User banned.', 'success')
+      setBanResults((prev) => prev.filter((u) => u.uid !== uid))
+      await loadBannedUsers()
+    } catch {
+      showToast('Could not ban user.', 'error')
+    } finally {
+      setBusyBanUid(null)
+    }
+  }
+
+  async function handleUnban(uid: string) {
+    setBusyBanUid(uid)
+    try {
+      await unbanUser(uid)
+      showToast('User unbanned.', 'success')
+      await loadBannedUsers()
+    } catch {
+      showToast('Could not unban user.', 'error')
+    } finally {
+      setBusyBanUid(null)
+    }
+  }
 
   async function handleSend(e: React.FormEvent) {
     e.preventDefault()
@@ -121,6 +200,80 @@ export default function Admin() {
             </Button>
           </div>
         </form>
+      </section>
+
+      {/* Ban Users */}
+      <section className="border-b border-slate-200 px-4 py-5 dark:border-slate-800 lg:px-6">
+        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">
+          Ban Users
+        </h2>
+        <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-800 dark:bg-slate-900">
+          <Search className="h-4 w-4 shrink-0 text-slate-400" aria-hidden />
+          <input
+            type="text"
+            value={banQuery}
+            onChange={(e) => setBanQuery(e.target.value)}
+            placeholder="Search @username to ban…"
+            className="w-full bg-transparent text-sm text-slate-900 outline-none placeholder:text-slate-400 dark:text-slate-100"
+          />
+        </div>
+
+        {/* Search results */}
+        {banResults.length > 0 && (
+          <div className="mt-3 space-y-2">
+            {banResults.map((u) => (
+              <div key={u.uid} className="flex items-center justify-between rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
+                <div className="min-w-0">
+                  <p className="truncate font-medium text-slate-900 dark:text-white">{u.name}</p>
+                  <p className="truncate text-xs text-slate-400">@{u.username}</p>
+                </div>
+                <Button
+                  variant="danger"
+                  size="sm"
+                  loading={busyBanUid === u.uid}
+                  onClick={() => void handleBan(u.uid)}
+                >
+                  <Ban className="h-3.5 w-3.5" /> Ban
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Banned users list */}
+        <div className="mt-4">
+          <p className="mb-2 text-xs font-medium text-slate-500 dark:text-slate-400">
+            Banned users ({bannedUsers.length})
+          </p>
+          {loadingBanned ? (
+            <div className="flex items-center justify-center py-4">
+              <div className="h-4 w-4 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" />
+            </div>
+          ) : bannedUsers.length === 0 ? (
+            <p className="py-4 text-center text-sm text-slate-400 dark:text-slate-500">
+              No banned users.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {bannedUsers.map((u) => (
+                <div key={u.uid} className="flex items-center justify-between rounded-xl border border-rose-200 bg-rose-50/60 p-3 dark:border-rose-500/30 dark:bg-rose-500/10">
+                  <div className="min-w-0">
+                    <p className="truncate font-medium text-slate-900 dark:text-white">{u.name}</p>
+                    <p className="truncate text-xs text-slate-400">@{u.username} · {u.email}</p>
+                  </div>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    loading={busyBanUid === u.uid}
+                    onClick={() => void handleUnban(u.uid)}
+                  >
+                    <CheckCircle className="h-3.5 w-3.5" /> Unban
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </section>
 
       {/* Past announcements */}

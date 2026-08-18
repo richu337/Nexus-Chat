@@ -11,6 +11,7 @@ export interface UserProfile {
   photoURL: string | null
   bio: string | null
   role: UserRole
+  banned: boolean
   online: boolean
   lastSeen: Timestamp | null
   createdAt: Timestamp | null

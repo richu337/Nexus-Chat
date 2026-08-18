@@ -9,6 +9,7 @@ import {
   Ban,
   Flag,
   Clock,
+  CheckCircle,
 } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import { useUserProfile, useCurrentUserProfile } from '@/hooks/useUserProfile'
@@ -27,6 +28,7 @@ import {
 } from '@/services/friends'
 import { getOrCreateDirectConversation } from '@/services/conversations'
 import { notifyFriendRequest } from '@/services/notifications'
+import { banUser, unbanUser } from '@/services/bans'
 import { formatLastSeen } from '@/utils/time'
 import { isNativePlatform } from '@/utils/platform'
 import type { RelationshipStatus } from '@/types'
@@ -149,6 +151,35 @@ export default function UserProfilePage() {
     showToast('Report sent. Thank you for keeping Nexus Chat safe.', 'success')
   }
 
+  const handleAdminBan = async () => {
+    setBusy(true)
+    setMenuOpen(false)
+    try {
+      await banUser(userId)
+      showToast('User banned.', 'success')
+    } catch {
+      showToast('Could not ban user.', 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleAdminUnban = async () => {
+    setBusy(true)
+    setMenuOpen(false)
+    try {
+      await unbanUser(userId)
+      showToast('User unbanned.', 'success')
+    } catch {
+      showToast('Could not unban user.', 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const isAdmin = myProfile?.role === 'admin'
+  const isBanned = profile.banned === true
+
   return (
     <div className="flex h-full flex-col">
       <HeaderShell title="Profile" onBack={() => navigate(-1)} />
@@ -181,6 +212,15 @@ export default function UserProfilePage() {
             <p className="mt-4 text-center text-sm leading-relaxed text-slate-600 dark:text-slate-300">
               {profile.bio}
             </p>
+          )}
+
+          {/* Banned banner */}
+          {isBanned && (
+            <div className="mt-4 w-full rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 dark:border-rose-500/30 dark:bg-rose-500/10">
+              <p className="text-center text-sm font-medium text-rose-700 dark:text-rose-400">
+                This account has been banned.
+              </p>
+            </div>
           )}
 
           {/* Relationship actions */}
@@ -271,6 +311,26 @@ export default function UserProfilePage() {
                       <Ban className="h-4 w-4" aria-hidden />
                       Block
                     </button>
+                  )}
+                  {/* Admin ban/unban */}
+                  {isAdmin && (
+                    isBanned ? (
+                      <button
+                        onClick={() => void handleAdminUnban()}
+                        className="flex w-full items-center gap-2 px-4 py-2 text-left text-sm text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-500/10"
+                      >
+                        <CheckCircle className="h-4 w-4" aria-hidden />
+                        Unban user
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => void handleAdminBan()}
+                        className="flex w-full items-center gap-2 px-4 py-2 text-left text-sm text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-500/10"
+                      >
+                        <Ban className="h-4 w-4" aria-hidden />
+                        Ban user
+                      </button>
+                    )
                   )}
                   <button
                     onClick={handleReport}

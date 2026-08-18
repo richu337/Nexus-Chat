@@ -8,7 +8,7 @@ import { Avatar } from '@/components/common/Avatar'
 import { ListSkeleton } from '@/components/common/Skeleton'
 import { EmptyState } from '@/components/common/EmptyState'
 import { AnnouncementBanner } from '@/components/announcements/AnnouncementBanner'
-import { formatTime } from '@/utils/time'
+import { formatTime, formatLastSeen } from '@/utils/time'
 import { otherMember } from '@/utils'
 import { usePresence, useWarmPresence } from '@/hooks/usePresence'
 import { reconcileUnreadCounts } from '@/services/conversations'
@@ -22,7 +22,7 @@ function ConversationRow({ conversation, me, onOpen }: {
 }) {
   const friendId = otherMember(conversation.members, me) ?? ''
   const { user } = useCurrentUserProfile(friendId)
-  const { online } = usePresence(friendId)
+  const { online, lastSeen } = usePresence(friendId)
   const unread = conversation.unreadCount?.[me] ?? 0
   const [typing, setTyping] = useState(false)
 
@@ -62,7 +62,14 @@ function ConversationRow({ conversation, me, onOpen }: {
               {user?.name?.split(' ')[0] ?? 'They'} are typing…
             </span>
           ) : (
-            <span className="truncate text-sm text-slate-500 dark:text-slate-400">{preview}</span>
+            <div className="min-w-0 flex-1">
+              <span className="truncate text-sm text-slate-500 dark:text-slate-400">{preview}</span>
+              {!online && (
+                <span className="ml-1.5 text-[11px] text-slate-400 dark:text-slate-500">
+                  · {formatLastSeen(lastSeen, online)}
+                </span>
+              )}
+            </div>
           )}
           {unread > 0 && (
             <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-indigo-600 px-1.5 text-[11px] font-bold text-white">

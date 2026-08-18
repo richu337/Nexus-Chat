@@ -41,6 +41,12 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/users/$(uid())).data.role == 'admin';
     }
 
+    function isBanned() {
+      return isSignedIn()
+        && get(/databases/$(database)/documents/users/$(uid())) != null
+        && get(/databases/$(database)/documents/users/$(uid())).data.banned == true;
+    }
+
     // ── users ──────────────────────────────────────────────────────────────
     match /users/{userId} {
       allow read: if isSignedIn();
@@ -74,7 +80,7 @@ service cloud.firestore {
       }
 
       allow read: if isSignedIn() && (resource == null || isParticipant());
-      allow create: if isSignedIn()
+      allow create: if isSignedIn() && !isBanned()
         && request.resource.data.senderId == uid()
         && request.resource.data.receiverId != uid()
         && request.resource.data.status == 'pending'
@@ -140,8 +146,8 @@ service cloud.firestore {
       function reqIsMember() { return uid() in request.resource.data.members; }
 
       allow read: if isSignedIn() && (resource == null || isMember());
-      // Only create 1:1 conversations and only with non-blocked users.
-      allow create: if isSignedIn()
+      // Only create 1:1 conversations and only with non-blocked users. Banned users cannot create.
+      allow create: if isSignedIn() && !isBanned()
         && request.resource.data.members.size() == 2
         && request.resource.data.type == 'direct'
         && reqIsMember()
@@ -170,7 +176,7 @@ service cloud.firestore {
         }
 
         allow read: if isSignedIn() && (resource == null || (convo() != null && uid() in convo().members));
-        allow create: if isSignedIn()
+        allow create: if isSignedIn() && !isBanned()
           && request.resource.data.senderId == uid()
           && convo() != null
           && uid() in convo().members
