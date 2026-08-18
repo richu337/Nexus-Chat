@@ -30,7 +30,6 @@ export default function Admin() {
   const [banQuery, setBanQuery] = useState('')
   const [banResults, setBanResults] = useState<UserProfile[]>([])
   const [bannedUsers, setBannedUsers] = useState<{ uid: string; name: string; username: string; email: string }[]>([])
-  const [searchingBan, setSearchingBan] = useState(false)
   const [loadingBanned, setLoadingBanned] = useState(true)
   const [busyBanUid, setBusyBanUid] = useState<string | null>(null)
 
@@ -57,14 +56,11 @@ export default function Admin() {
         setBanResults([])
         return
       }
-      setSearchingBan(true)
       try {
         const found = await searchUsersByUsername(q)
         setBanResults(found.filter((u) => u.uid !== user?.uid))
       } catch {
         showToast('Search failed.', 'error')
-      } finally {
-        setSearchingBan(false)
       }
     }, 400),
   )

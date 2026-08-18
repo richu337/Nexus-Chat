@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useMemo, useCallback } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
 import {
   ArrowLeft, Send, MoreVertical, Phone, Video,
-  Reply, Pencil, Trash2, SmilePlus, X, Check, CheckCheck,
+  Reply, Pencil, Trash2, SmilePlus, X, Check, CheckCheck, Users,
 } from 'lucide-react'
 import { Timestamp } from 'firebase/firestore'
 import { useAuth } from '@/hooks/useAuth'
@@ -11,6 +11,10 @@ import { useCurrentUserProfile } from '@/hooks/useUserProfile'
 import { usePresence } from '@/hooks/usePresence'
 import { useToast } from '@/hooks/useToast'
 import { Avatar } from '@/components/common/Avatar'
+import { GroupAvatar } from '@/components/chat/GroupAvatar'
+import { ImageMessage } from '@/components/chat/ImageMessage'
+import { ImagePicker, ImagePreviewBar } from '@/components/chat/ImagePicker'
+import { GroupTypingIndicator } from '@/components/chat/GroupTypingIndicator'
 import { ChatSkeleton } from '@/components/common/Skeleton'
 import { EmptyState } from '@/components/common/EmptyState'
 import { markConversationRead } from '@/services/conversations'
@@ -18,6 +22,7 @@ import {
   subscribeToMessages,
   loadOlderMessages,
   sendMessage,
+  sendImageMessage,
   replyToMessage,
   editMessage,
   deleteMessage,
@@ -27,10 +32,13 @@ import {
 } from '@/services/messages'
 import { startTyping, stopTyping, subscribeToTyping } from '@/services/typing'
 import { notifyNewMessage } from '@/services/notifications'
+import { uploadChatImage } from '@/services/chatMedia'
+import { isAdmin as checkIsAdmin } from '@/services/groups'
 import { otherMember } from '@/utils'
 import { formatMessageTime } from '@/utils/time'
 import { validateMessage } from '@/utils/validators'
-import type { Message, MessageReplyTo } from '@/types'
+import { subscribeToUser } from '@/services/users'
+import type { Message, MessageReplyTo, UserProfile } from '@/types'
 
 const EMOJI_OPTIONS = ['👍', '❤️', '😂', '😮', '😢', '😡', '🎉', '🔥']
 
@@ -74,6 +82,8 @@ function MessageStatusIcon({ message, isNew }: { message: Message; isNew?: boole
 interface ContextMenuProps {
   message: Message
   me: string
+  isGroupAdmin: boolean
+  isGroup: boolean
   position: { x: number; y: number }
   onClose: () => void
   onReply: (msg: Message) => void
@@ -82,8 +92,9 @@ interface ContextMenuProps {
   onReact: (msg: Message, emoji: string) => void
 }
 
-function ContextMenu({ message, me, position, onClose, onReply, onEdit, onDelete, onReact }: ContextMenuProps) {
+function ContextMenu({ message, me, isGroupAdmin, isGroup, position, onClose, onReply, onEdit, onDelete, onReact }: ContextMenuProps) {
   const mine = message.senderId === me
+  const canDelete = mine || (isGroup && isGroupAdmin)
   const [showEmoji, setShowEmoji] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -128,25 +139,44 @@ function ContextMenu({ message, me, position, onClose, onReply, onEdit, onDelete
             ))}
           </div>
         )}
-        {mine && (
-          <>
-            <button
-              onClick={() => { onEdit(message); onClose() }}
-              className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700"
-            >
-              <Pencil className="h-4 w-4" /> Edit
-            </button>
-            <button
-              onClick={() => { onDelete(message); onClose() }}
-              className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/40"
-            >
-              <Trash2 className="h-4 w-4" /> Delete
-            </button>
-          </>
+        {mine && message.type !== 'image' && (
+          <button
+            onClick={() => { onEdit(message); onClose() }}
+            className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700"
+          >
+            <Pencil className="h-4 w-4" /> Edit
+          </button>
+        )}
+        {canDelete && (
+          <button
+            onClick={() => { onDelete(message); onClose() }}
+            className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/40"
+          >
+            <Trash2 className="h-4 w-4" /> Delete
+          </button>
         )}
       </div>
     </div>
   )
+}
+
+/** Subscribe to multiple user profiles for group member names */
+function useMemberProfiles(uids: string[]): Map<string, UserProfile> {
+  const [profiles, setProfiles] = useState<Map<string, UserProfile>>(new Map())
+
+  useEffect(() => {
+    if (uids.length === 0) { setProfiles(new Map()); return }
+    const unsubscribes: (() => void)[] = []
+    for (const uid of uids) {
+      const unsub = subscribeToUser(uid, (u) => {
+        if (u) setProfiles((prev) => new Map(prev).set(uid, u))
+      })
+      unsubscribes.push(unsub)
+    }
+    return () => unsubscribes.forEach((u) => u())
+  }, [uids.join(',')])
+
+  return profiles
 }
 
 export default function Chat() {
@@ -157,10 +187,18 @@ export default function Chat() {
   const me = user?.uid ?? ''
 
   const { conversation } = useConversation(conversationId)
-  const otherId = conversation ? (otherMember(conversation.members, me) ?? '') : ''
+  const isGroup = conversation?.type === 'group'
+  const otherId = !isGroup ? (conversation ? (otherMember(conversation.members, me) ?? '') : '') : ''
   const { user: otherUser } = useCurrentUserProfile(otherId)
   const { online, lastSeen } = usePresence(otherId)
   const { user: senderProfile } = useCurrentUserProfile(me)
+
+  // Group-specific
+  const memberProfileMap = useMemberProfiles(isGroup ? (conversation?.members ?? []) : [])
+  const amGroupAdmin = isGroup ? checkIsAdmin(conversation!, me) : false
+
+  // Group typing
+  const [groupTypingNames, setGroupTypingNames] = useState<string[]>([])
 
   const [messages, setMessages] = useState<Message[]>([])
   const [typing, setTyping] = useState(false)
@@ -173,6 +211,10 @@ export default function Chat() {
   const [editText, setEditText] = useState('')
   const [contextMenu, setContextMenu] = useState<{ message: Message; x: number; y: number } | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Message | null>(null)
+
+  // Image states
+  const [pendingImage, setPendingImage] = useState<{ file: File; preview: string; width: number; height: number } | null>(null)
+  const [imageSending, setImageSending] = useState(false)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -196,9 +238,6 @@ export default function Chat() {
     const unsub = subscribeToMessages(
       conversationId,
       (msgs) => {
-        // While a send is in progress, ignore subscription updates to avoid
-        // the optimistic + real duplicate flash. The send handler will
-        // replace the optimistic with the real message when it resolves.
         if (sendingRef.current) return
         setMessages((prev) => {
           const merged = new Map(prev.map((m) => [m.id, m]))
@@ -217,7 +256,6 @@ export default function Chat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId])
 
-  // Track oldest message for "load older" pagination.
   const oldest = useMemo(() => messages[0], [messages])
 
   // ── Scroll behavior ───────────────────────────────────────────────────────
@@ -231,7 +269,6 @@ export default function Chat() {
 
     if (shouldStickRef.current) {
       if (added > 0) {
-        // Instant scroll — no smooth, no jump
         el.scrollTop = el.scrollHeight
       } else {
         el.scrollTop = el.scrollHeight
@@ -241,31 +278,60 @@ export default function Chat() {
 
   // ── Mark as read / delivered ─────────────────────────────────────────────
   useEffect(() => {
-    if (!conversationId || !me || !otherId) return
+    if (!conversationId || !me) return
     if (messages.length === 0) return
 
-    const newForMe = messages.filter(
-      (m) => m.senderId === otherId && !seenRef.current.has(m.id),
-    )
-    if (newForMe.length === 0) return
+    // For groups, mark as read for all non-self messages
+    const senders = isGroup
+      ? [...new Set(messages.filter((m) => m.senderId !== me).map((m) => m.senderId))]
+      : [otherId]
 
-    for (const m of newForMe) seenRef.current.add(m.id)
+    for (const senderId of senders) {
+      if (!senderId) continue
+      const newForMe = messages.filter(
+        (m) => m.senderId === senderId && !seenRef.current.has(m.id),
+      )
+      if (newForMe.length === 0) continue
 
-    // We are viewing the conversation → mark delivered + read immediately.
-    void markMessagesDelivered(conversationId, otherId, newForMe)
-      .then(() => markMessagesRead(conversationId, otherId, newForMe))
-      .catch(() => {})
+      for (const m of newForMe) seenRef.current.add(m.id)
+
+      void markMessagesDelivered(conversationId, senderId, newForMe)
+        .then(() => markMessagesRead(conversationId, senderId, newForMe))
+        .catch(() => {})
+    }
     void markConversationRead(conversationId, me).catch(() => {})
-  }, [messages, conversationId, me, otherId])
+  }, [messages, conversationId, me, otherId, isGroup])
 
-  // ── Typing subscription ──────────────────────────────────────────────────
+  // ── Typing subscription (direct) ──────────────────────────────────────────
   useEffect(() => {
-    if (!conversationId || !otherId) return
+    if (isGroup || !conversationId || !otherId) return
     const unsub = subscribeToTyping(conversationId, otherId, (active) => {
       setTyping(active)
     })
     return unsub
-  }, [conversationId, otherId])
+  }, [conversationId, otherId, isGroup])
+
+  // ── Typing subscription (group) ───────────────────────────────────────────
+  useEffect(() => {
+    if (!isGroup || !conversationId) return
+    const members = (conversation?.members ?? []).filter((id) => id !== me)
+    if (members.length === 0) return
+
+    const unsubscribes: (() => void)[] = []
+    for (const uid of members) {
+      const unsub = subscribeToTyping(conversationId, uid, (active) => {
+        setGroupTypingNames((prev) => {
+          const name = memberProfileMap.get(uid)?.name?.split(' ')[0] ?? ''
+          if (!name) return prev
+          if (active && !prev.includes(name)) return [...prev, name]
+          if (!active) return prev.filter((n) => n !== name)
+          return prev
+        })
+      })
+      unsubscribes.push(unsub)
+    }
+    return () => unsubscribes.forEach((u) => u())
+  }, [conversationId, isGroup, conversation?.members, me, memberProfileMap])
 
   // ── Typing emission (debounced) ──────────────────────────────────────────
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -321,6 +387,55 @@ export default function Chat() {
     shouldStickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120
   }
 
+  // ── Send image ──────────────────────────────────────────────────────────
+  const handleSendImage = useCallback(async () => {
+    if (!conversationId || !me || !pendingImage) return
+    setImageSending(true)
+    sendingRef.current = true
+
+    const optimistic: Message = {
+      id: `local-img-${Date.now()}`,
+      conversationId,
+      senderId: me,
+      text: '',
+      type: 'image',
+      status: 'sending',
+      createdAt: new Timestamp(Date.now() / 1000, 0),
+      updatedAt: new Timestamp(Date.now() / 1000, 0),
+      deliveredAt: null,
+      readAt: null,
+      imageURL: pendingImage.preview,
+      imageWidth: pendingImage.width,
+      imageHeight: pendingImage.height,
+    }
+    animatingRef.current.add(optimistic.id)
+    setMessages((prev) => [...prev, optimistic])
+    setPendingImage(null)
+    shouldStickRef.current = true
+
+    try {
+      const { url, width, height } = await uploadChatImage(conversationId, pendingImage.file)
+      const saved = await sendImageMessage(conversationId, me, '', url, width, height)
+      animatingRef.current.add(saved.id)
+      animatingRef.current.delete(optimistic.id)
+      setMessages((prev) => {
+        const next = prev.filter((m) => m.id !== optimistic.id)
+        return [...next, { ...saved, status: 'sent' as const }]
+      })
+      setTimeout(() => animatingRef.current.delete(saved.id), 350)
+    } catch {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === optimistic.id ? { ...m, status: 'error' as const } : m,
+        ),
+      )
+      showToast('Image could not be sent.', 'error')
+    } finally {
+      sendingRef.current = false
+      setImageSending(false)
+    }
+  }, [conversationId, me, pendingImage, showToast])
+
   // ── Send / Reply / Edit ──────────────────────────────────────────────────
   const handleSend = useCallback(async () => {
     if (!conversationId || !me || !senderProfile) return
@@ -328,7 +443,6 @@ export default function Chat() {
     const err = validateMessage(text)
     if (err || sending) return
 
-    // If editing, save the edit instead
     if (editingMsg) {
       const origText = editingMsg.text
       if (text === origText) { setEditingMsg(null); setInput(''); return }
@@ -349,7 +463,6 @@ export default function Chat() {
     setSending(true)
     sendingRef.current = true
 
-    // Build replyTo metadata if replying
     const replyMeta = replyTo ? { ...replyTo } : null
 
     const optimistic: Message = {
@@ -387,7 +500,20 @@ export default function Chat() {
       })
       setTimeout(() => animatingRef.current.delete(saved.id), 350)
       void stopTyping(conversationId, me)
-      if (otherId && otherUser) {
+
+      // Notify other users
+      if (isGroup) {
+        // For groups, notify all members except self
+        const members = (conversation?.members ?? []).filter((id) => id !== me)
+        for (const targetId of members) {
+          void notifyNewMessage({
+            sender: senderProfile,
+            targetUserId: targetId,
+            text,
+            conversationId,
+          })
+        }
+      } else if (otherId && otherUser) {
         void notifyNewMessage({
           sender: senderProfile,
           targetUserId: otherId,
@@ -406,12 +532,16 @@ export default function Chat() {
       sendingRef.current = false
       setSending(false)
     }
-  }, [conversationId, me, input, sending, senderProfile, otherId, otherUser, showToast, replyTo, editingMsg])
+  }, [conversationId, me, input, sending, senderProfile, otherId, otherUser, showToast, replyTo, editingMsg, isGroup, conversation])
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      void handleSend()
+      if (pendingImage) {
+        void handleSendImage()
+      } else {
+        void handleSend()
+      }
     }
     if (e.key === 'Escape' && editingMsg) {
       setEditingMsg(null)
@@ -453,6 +583,12 @@ export default function Chat() {
     }
   }
 
+  // Get sender profile for display name in groups
+  const getSenderName = (senderId: string) => {
+    if (!isGroup) return ''
+    return memberProfileMap.get(senderId)?.name ?? 'Unknown'
+  }
+
   // ── Render ───────────────────────────────────────────────────────────────
   if (!conversation) {
     return (
@@ -474,7 +610,8 @@ export default function Chat() {
 
   return (
     <div className="flex h-full flex-col">
-      {/* Header */}      <header className="flex items-center gap-3 border-b border-slate-200 bg-white/90 px-4 py-3 backdrop-blur dark:border-slate-800 dark:bg-slate-900/90">
+      {/* Header */}
+      <header className="flex items-center gap-3 border-b border-slate-200 bg-white/90 px-4 py-3 backdrop-blur dark:border-slate-800 dark:bg-slate-900/90">
         <button
           onClick={() => navigate('/chats')}
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
@@ -483,42 +620,75 @@ export default function Chat() {
           <ArrowLeft className="h-5 w-5" />
         </button>
 
-        <Link to={`/user/${otherId}`} className="flex min-w-0 flex-1 items-center gap-3">
-          <Avatar name={otherUser?.name ?? '…'} photoURL={otherUser?.photoURL} online={online} />
-          <div className="min-w-0">
-            <p className="truncate font-semibold text-slate-900 dark:text-slate-100">
-              {otherUser?.name ?? '…'}
-            </p>
-            <p className="truncate text-xs text-slate-400 dark:text-slate-500">
-              {typing
-                ? <span className="font-medium text-indigo-500">{otherUser?.name?.split(' ')[0] ?? ''} is typing…</span>
-                : online
-                  ? 'Online'
-                  : formatMessageTime(lastSeen)}
-            </p>
-          </div>
-        </Link>
+        {isGroup ? (
+          <Link to={`/group/${conversationId}/info`} className="flex min-w-0 flex-1 items-center gap-3">
+            <GroupAvatar
+              groupPhotoURL={conversation.groupPhotoURL}
+              groupName={conversation.groupName}
+            />
+            <div className="min-w-0">
+              <p className="truncate font-semibold text-slate-900 dark:text-slate-100">
+                {conversation.groupName ?? 'Group'}
+              </p>
+              <p className="truncate text-xs text-slate-400 dark:text-slate-500">
+                {groupTypingNames.length > 0 ? (
+                  <GroupTypingIndicator typingNames={groupTypingNames} />
+                ) : (
+                  `${conversation.members.length} members`
+                )}
+              </p>
+            </div>
+          </Link>
+        ) : (
+          <Link to={`/user/${otherId}`} className="flex min-w-0 flex-1 items-center gap-3">
+            <Avatar name={otherUser?.name ?? '…'} photoURL={otherUser?.photoURL} online={online} />
+            <div className="min-w-0">
+              <p className="truncate font-semibold text-slate-900 dark:text-slate-100">
+                {otherUser?.name ?? '…'}
+              </p>
+              <p className="truncate text-xs text-slate-400 dark:text-slate-500">
+                {typing
+                  ? <span className="font-medium text-indigo-500">{otherUser?.name?.split(' ')[0] ?? ''} is typing…</span>
+                  : online
+                    ? 'Online'
+                    : formatMessageTime(lastSeen)}
+              </p>
+            </div>
+          </Link>
+        )}
 
         <div className="flex items-center gap-1">
-          <button
-            className="hidden h-9 w-9 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800 sm:flex"
-            aria-label="Call"
-          >
-            <Phone className="h-5 w-5" />
-          </button>
-          <button
-            className="hidden h-9 w-9 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800 sm:flex"
-            aria-label="Video"
-          >
-            <Video className="h-5 w-5" />
-          </button>
-          <Link
-            to={`/user/${otherId}`}
-            className="flex h-9 w-9 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
-            aria-label="Profile"
-          >
-            <MoreVertical className="h-5 w-5" />
-          </Link>
+          {isGroup ? (
+            <Link
+              to={`/group/${conversationId}/info`}
+              className="flex h-9 w-9 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+              aria-label="Group Info"
+            >
+              <Users className="h-5 w-5" />
+            </Link>
+          ) : (
+            <>
+              <button
+                className="hidden h-9 w-9 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800 sm:flex"
+                aria-label="Call"
+              >
+                <Phone className="h-5 w-5" />
+              </button>
+              <button
+                className="hidden h-9 w-9 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800 sm:flex"
+                aria-label="Video"
+              >
+                <Video className="h-5 w-5" />
+              </button>
+              <Link
+                to={`/user/${otherId}`}
+                className="flex h-9 w-9 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+                aria-label="Profile"
+              >
+                <MoreVertical className="h-5 w-5" />
+              </Link>
+            </>
+          )}
         </div>
       </header>
 
@@ -545,7 +715,7 @@ export default function Chat() {
             <EmptyState
               icon={<Send className="h-7 w-7" />}
               title="No messages yet"
-              description={`Say hello to ${otherUser?.name ?? 'this user'} and start the conversation.`}
+              description={isGroup ? 'Send the first message to start the conversation.' : `Say hello to ${otherUser?.name ?? 'this user'} and start the conversation.`}
             />
           </div>
         )}
@@ -559,9 +729,11 @@ export default function Chat() {
               ((messages[idx - 1]?.createdAt?.toMillis() ?? 0) < (msg.createdAt?.toMillis() ?? 0) - 5 * 60_000)
             const isNew = animatingRef.current.has(msg.id)
             const isEditing = editingMsg?.id === msg.id
-            const isLastSent = mine && idx === messages.length - 1
             const isLastSentByMe = mine && messages.slice(idx + 1).every((m) => m.senderId !== me)
             const showSeen = isLastSentByMe && msg.status === 'read'
+
+            // Show sender name in groups when sender changes
+            const showSenderName = isGroup && (idx === 0 || messages[idx - 1]?.senderId !== msg.senderId)
 
             if (msg.deleted) {
               return (
@@ -591,6 +763,14 @@ export default function Chat() {
                     </span>
                   </div>
                 )}
+
+                {/* Sender name for groups */}
+                {showSenderName && !mine && isGroup && (
+                  <p className="mb-0.5 ml-1 text-xs font-medium text-slate-500 dark:text-slate-400">
+                    {getSenderName(msg.senderId)}
+                  </p>
+                )}
+
                 <div className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
                   <div
                     className={`max-w-[80%] rounded-2xl px-3.5 py-2 text-sm leading-relaxed sm:max-w-[70%] ${
@@ -609,8 +789,21 @@ export default function Chat() {
                           ? 'border-white/40 bg-white/10 text-white/70'
                           : 'border-indigo-400 bg-indigo-50 text-slate-500 dark:bg-indigo-950/30 dark:text-slate-400'
                       }`}>
-                        <p className="font-medium">{msg.replyTo.senderId === me ? 'You' : otherUser?.name?.split(' ')[0]}</p>
+                        <p className="font-medium">
+                          {msg.replyTo.senderId === me ? 'You' : getSenderName(msg.replyTo.senderId) || otherUser?.name?.split(' ')[0]}
+                        </p>
                         <p className="truncate">{msg.replyTo.text}</p>
+                      </div>
+                    )}
+
+                    {/* Image message */}
+                    {msg.type === 'image' && msg.imageURL && !isEditing && (
+                      <div className="mb-1">
+                        <ImageMessage
+                          src={msg.imageURL}
+                          width={msg.imageWidth}
+                          height={msg.imageHeight}
+                        />
                       </div>
                     )}
 
@@ -650,11 +843,11 @@ export default function Chat() {
                         </div>
                       </div>
                     ) : (
-                      <span className="whitespace-pre-wrap break-words">{msg.text}</span>
+                      msg.text && <span className="whitespace-pre-wrap break-words">{msg.text}</span>
                     )}
 
                     {/* Edited indicator + status */}
-                    {!isEditing && (
+                    {!isEditing && (msg.text || msg.type !== 'image') && (
                       <span className="ml-2 inline-flex items-center gap-1">
                         {msg.edited && <span className="text-[10px] opacity-60">(edited)</span>}
                         {mine && <MessageStatusIcon message={msg} isNew={isNew} />}
@@ -708,13 +901,21 @@ export default function Chat() {
 
       {/* Composer */}
       <div className="border-t border-slate-200 bg-white px-3 py-3 pb-safe dark:border-slate-800 dark:bg-slate-900">
+        {/* Image preview */}
+        {pendingImage && (
+          <ImagePreviewBar
+            preview={pendingImage.preview}
+            onCancel={() => setPendingImage(null)}
+          />
+        )}
+
         {/* Reply preview */}
         {replyTo && (
           <div className="mb-2 flex items-center gap-2 rounded-lg bg-indigo-50 px-3 py-2 dark:bg-indigo-950/30">
             <Reply className="h-4 w-4 shrink-0 text-indigo-500" />
             <div className="min-w-0 flex-1">
               <p className="text-xs font-medium text-indigo-600 dark:text-indigo-400">
-                Replying to {replyTo.senderId === me ? 'yourself' : otherUser?.name?.split(' ')[0]}
+                Replying to {replyTo.senderId === me ? 'yourself' : getSenderName(replyTo.senderId) || otherUser?.name?.split(' ')[0]}
               </p>
               <p className="truncate text-xs text-slate-500 dark:text-slate-400">{replyTo.text}</p>
             </div>
@@ -736,15 +937,14 @@ export default function Chat() {
         )}
 
         <div className="flex items-end gap-2">
-          <button
-            className="hidden h-11 w-11 shrink-0 items-center justify-center rounded-xl text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 sm:flex"
-            aria-label="Attach"
-            onClick={() => showToast('File sharing is coming soon.', 'info')}
-          >
-            <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
-            </svg>
-          </button>
+          <ImagePicker
+            onImageSelected={(file, preview, width, height) => {
+              setPendingImage({ file, preview, width, height })
+              setReplyTo(null)
+              setEditingMsg(null)
+            }}
+            disabled={sending || imageSending}
+          />
 
           <textarea
             ref={inputRef}
@@ -757,8 +957,8 @@ export default function Chat() {
           />
 
           <button
-            onClick={() => void handleSend()}
-            disabled={!input.trim() || sending}
+            onClick={() => pendingImage ? void handleSendImage() : void handleSend()}
+            disabled={(!input.trim() && !pendingImage) || sending || imageSending}
             className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-indigo-600 text-white transition-colors hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
             aria-label="Send"
           >
@@ -772,6 +972,8 @@ export default function Chat() {
         <ContextMenu
           message={contextMenu.message}
           me={me}
+          isGroupAdmin={amGroupAdmin}
+          isGroup={isGroup}
           position={{ x: contextMenu.x, y: contextMenu.y }}
           onClose={() => setContextMenu(null)}
           onReply={(msg) => {

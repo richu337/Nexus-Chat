@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from 'react'
-import { Link } from 'react-router-dom'
-import { Search as SearchIcon, UserSearch, UserRound } from 'lucide-react'
+import { Link, useNavigate } from 'react-router-dom'
+import { Search as SearchIcon, UserSearch, UserRound, Users } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/hooks/useToast'
 import { Avatar } from '@/components/common/Avatar'
@@ -12,6 +12,7 @@ import type { UserProfile } from '@/types'
 export default function Search() {
   const { user } = useAuth()
   const { showToast } = useToast()
+  const navigate = useNavigate()
   const me = user?.uid ?? ''
 
   const [query, setQuery] = useState('')
@@ -50,7 +51,16 @@ export default function Search() {
   return (
     <div className="flex h-full flex-col">
       <header className="border-b border-slate-200 px-4 py-4 dark:border-slate-800 lg:px-6">
-        <h1 className="text-xl font-bold text-slate-900 dark:text-white">Find People</h1>
+        <div className="flex items-center justify-between">
+          <h1 className="text-xl font-bold text-slate-900 dark:text-white">Find People</h1>
+          <button
+            onClick={() => navigate('/create-group')}
+            className="flex items-center gap-2 rounded-xl bg-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-300 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600"
+          >
+            <Users className="h-4 w-4" aria-hidden />
+            New Group
+          </button>
+        </div>
         <div className="mt-3 flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 dark:border-slate-800 dark:bg-slate-900">
           <SearchIcon className="h-4 w-4 shrink-0 text-slate-400" aria-hidden />
           <input

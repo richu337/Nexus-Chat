@@ -88,12 +88,13 @@ export interface Announcement {
 
 // ─── Conversations ─────────────────────────────────────────────────────────
 
-export type MessageType = 'text'
+export type MessageType = 'text' | 'image'
 export type MessageStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'error'
+export type ConversationType = 'direct' | 'group'
 
 export interface Conversation {
   id: string
-  type: 'direct'
+  type: ConversationType
   members: string[]
   createdAt: Timestamp | null
   updatedAt: Timestamp | null
@@ -103,6 +104,11 @@ export interface Conversation {
   lastMessageAt: Timestamp | null
   lastReadAt: Record<string, Timestamp>
   unreadCount: Record<string, number>
+  // Group-specific fields (null for direct conversations)
+  groupName: string | null
+  groupPhotoURL: string | null
+  createdBy: string | null
+  admins: string[]
 }
 
 export interface MessageReplyTo {
@@ -133,7 +139,13 @@ export interface Message {
   edited?: boolean
   deleted?: boolean
   deletedAt?: Timestamp | null
+  // Image-specific fields
+  imageURL?: string | null
+  imageWidth?: number | null
+  imageHeight?: number | null
 }
+
+export const GROUP_MAX_MEMBERS = 50
 
 // ─── Misc ──────────────────────────────────────────────────────────────────
 

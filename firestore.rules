@@ -144,18 +144,71 @@ service cloud.firestore {
         return resource != null && resource.data != null && uid() in resource.data.members;
       }
       function reqIsMember() { return uid() in request.resource.data.members; }
+      function isGroupAdmin() {
+        return resource != null && resource.data != null
+          && resource.data.type == 'group'
+          && uid() in resource.data.admins;
+      }
+      function reqIsGroupAdmin() {
+        return request.resource.data.type == 'group'
+          && uid() in request.resource.data.admins;
+      }
 
       allow read: if isSignedIn() && (resource == null || isMember());
-      // Only create 1:1 conversations and only with non-blocked users. Banned users cannot create.
+
+      // Direct conversations: exactly 2 members, no blocks between them.
       allow create: if isSignedIn() && !isBanned()
-        && request.resource.data.members.size() == 2
         && request.resource.data.type == 'direct'
+        && request.resource.data.members.size() == 2
         && reqIsMember()
         && !isBlockedBetween(request.resource.data.members[0], request.resource.data.members[1]);
-      // Members may update unread counts, lastReadAt, typing etc. but never
-      // change membership.
+
+      // Group conversations: 2-50 members, creator must be a member and admin.
+      allow create: if isSignedIn() && !isBanned()
+        && request.resource.data.type == 'group'
+        && request.resource.data.members.size() >= 2
+        && request.resource.data.members.size() <= 50
+        && reqIsMember()
+        && request.resource.data.createdBy == uid()
+        && uid() in request.resource.data.admins;
+
+      // Members may update unread counts, lastReadAt, typing, etc.
+      // For groups, only admins can change group metadata (name, photo, admins, members).
+      // Membership changes are allowed for admins.
       allow update: if isSignedIn() && isMember()
-        && request.resource.data.members == resource.data.members;
+        && (
+          // Direct: membership is immutable.
+          (resource.data.type == 'direct' && request.resource.data.members == resource.data.members)
+          ||
+          // Group: admins can change members, groupName, groupPhotoURL, admins.
+          // Any member can update other fields (lastMessage, unreadCount, etc.).
+          (resource.data.type == 'group' && (
+            // Membership change: only by admins.
+            (request.resource.data.members != resource.data.members
+              && request.resource.data.admins == resource.data.admins
+              && request.resource.data.groupName == resource.data.groupName
+              && request.resource.data.groupPhotoURL == resource.data.groupPhotoURL)
+            ||
+            // Admin change: only by admins.
+            (request.resource.data.admins != resource.data.admins
+              && request.resource.data.members == resource.data.members
+              && request.resource.data.groupName == resource.data.groupName
+              && request.resource.data.groupPhotoURL == resource.data.groupPhotoURL)
+            ||
+            // Group name/photo change: only by admins.
+            (request.resource.data.groupName != resource.data.groupName
+              || request.resource.data.groupPhotoURL != resource.data.groupPhotoURL)
+              && request.resource.data.members == resource.data.members
+              && request.resource.data.admins == resource.data.admins
+            ||
+            // Non-metadata changes (lastMessage, unreadCount, etc.)
+            (request.resource.data.members == resource.data.members
+              && request.resource.data.admins == resource.data.admins
+              && request.resource.data.groupName == resource.data.groupName
+              && request.resource.data.groupPhotoURL == resource.data.groupPhotoURL)
+          ))
+        );
+
       allow delete: if isSignedIn() && isMember();
 
       // Typing heartbeat document (lightweight, throttled).
@@ -174,17 +227,37 @@ service cloud.firestore {
           let c = get(/databases/$(database)/documents/conversations/$(conversationId));
           return c != null ? c.data : null;
         }
+        function convoIsGroup() {
+          return convo() != null && convo().type == 'group';
+        }
+        function convoAdmins() {
+          return convoIsGroup() ? convo().admins : [];
+        }
+        function isConvoAdmin() {
+          return convoIsGroup() && uid() in convoAdmins();
+        }
 
         allow read: if isSignedIn() && (resource == null || (convo() != null && uid() in convo().members));
+
+        // Create: text or image messages, sender must be self, must be member, no blocks for direct chats.
         allow create: if isSignedIn() && !isBanned()
           && request.resource.data.senderId == uid()
           && convo() != null
           && uid() in convo().members
-          && request.resource.data.type == 'text'
-          && request.resource.data.text is string
-          && request.resource.data.text.size() > 0
-          && request.resource.data.text.size() <= 4000
-          && !isBlockedBetween(convo().members[0], convo().members[1]);
+          && (request.resource.data.type == 'text' || request.resource.data.type == 'image')
+          // Text validation
+          && (request.resource.data.type != 'text'
+              || (request.resource.data.text is string
+                  && request.resource.data.text.size() > 0
+                  && request.resource.data.text.size() <= 4000))
+          // Image validation
+          && (request.resource.data.type != 'image'
+              || (request.resource.data.imageURL is string
+                  && request.resource.data.imageURL.size() > 0))
+          // Block check only for direct conversations
+          && (!convoIsGroup()
+              || !isBlockedBetween(convo().members[0], convo().members[1]));
+
         // Status update (delivered / read) — any member can update.
         allow update: if isSignedIn()
           && convo() != null
@@ -203,6 +276,15 @@ service cloud.firestore {
           && request.resource.data.type == resource.data.type
           && request.resource.data.diff(resource.data).affectedKeys()
              .hasOnly(['text', 'edited', 'deleted', 'deletedAt', 'reactions', 'updatedAt']);
+
+        // Admin can delete any message in group conversations.
+        allow update: if isSignedIn()
+          && convoIsGroup()
+          && isConvoAdmin()
+          && request.resource.data.senderId == resource.data.senderId
+          && request.resource.data.type == resource.data.type
+          && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['deleted', 'deletedAt', 'text', 'updatedAt']);
 
         allow delete: if false;
       }

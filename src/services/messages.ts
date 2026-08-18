@@ -51,6 +51,9 @@ function parseMessage(docData: QueryDocumentSnapshot<DocumentData>): Message {
     edited: data.edited ?? false,
     deleted: data.deleted ?? false,
     deletedAt: (data.deletedAt as Timestamp | null) ?? null,
+    imageURL: (data.imageURL as string | null) ?? null,
+    imageWidth: (data.imageWidth as number | null) ?? null,
+    imageHeight: (data.imageHeight as number | null) ?? null,
   }
 }
 
@@ -146,6 +149,62 @@ export async function sendMessage(
     updatedAt: null,
     deliveredAt: null,
     readAt: null,
+  }
+}
+
+/**
+ * Sends an image message. The message is created with status 'sent'; the UI
+ * tracks 'sending' locally until this promise resolves.
+ */
+export async function sendImageMessage(
+  conversationId: string,
+  senderId: string,
+  text: string,
+  imageURL: string,
+  imageWidth: number,
+  imageHeight: number,
+): Promise<Message> {
+  const trimmed = text.trim()
+
+  const now = serverTimestamp()
+  const ref = await addDoc(messagesCollectionRef(conversationId), {
+    senderId,
+    text: trimmed,
+    type: 'image',
+    status: 'sent',
+    imageURL,
+    imageWidth,
+    imageHeight,
+    createdAt: now,
+    updatedAt: now,
+    deliveredAt: null,
+    readAt: null,
+  })
+
+  // Update conversation preview with truncated text or "[Image]"
+  const preview = trimmed || '[Image]'
+  await convUpdateDoc(conversationDocRef(conversationId), {
+    lastMessage: preview,
+    lastMessageType: 'image',
+    lastMessageSenderId: senderId,
+    lastMessageAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  })
+
+  return {
+    id: ref.id,
+    conversationId,
+    senderId,
+    text: trimmed,
+    type: 'image',
+    status: 'sent',
+    createdAt: null,
+    updatedAt: null,
+    deliveredAt: null,
+    readAt: null,
+    imageURL,
+    imageWidth,
+    imageHeight,
   }
 }
 

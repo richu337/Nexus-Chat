@@ -20,6 +20,8 @@ const Search = lazy(() => import('@/pages/Search'))
 const UserProfile = lazy(() => import('@/pages/UserProfile'))
 const Settings = lazy(() => import('@/pages/Settings'))
 const Admin = lazy(() => import('@/pages/Admin'))
+const CreateGroup = lazy(() => import('@/pages/CreateGroup'))
+const GroupInfo = lazy(() => import('@/pages/GroupInfo'))
 
 function FullScreenLoader({ message = 'Loading…' }: { message?: string }) {
   return (
@@ -156,6 +158,8 @@ function AppRoutes() {
         <Route path="/search" element={<LazyPage><Search /></LazyPage>} />
         <Route path="/user/:userId" element={<LazyPage><UserProfile /></LazyPage>} />
         <Route path="/settings" element={<LazyPage><Settings /></LazyPage>} />
+        <Route path="/create-group" element={<LazyPage><CreateGroup /></LazyPage>} />
+        <Route path="/group/:groupId/info" element={<LazyPage><GroupInfo /></LazyPage>} />
         <Route
           path="/admin"
           element={
