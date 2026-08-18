@@ -8,14 +8,13 @@ import App from './App'
 
 initOTA()
 
-if (import.meta.env.DEV) {
-  window.addEventListener('unhandledrejection', (e) => {
-    const msg = String(e.reason?.message ?? e.reason ?? '')
-    if (msg.includes('Database is closing') || msg.includes('Database is hidden')) {
-      e.preventDefault()
-    }
-  })
-}
+// Suppress harmless Firebase Auth IndexedDB errors when the tab goes to background.
+window.addEventListener('unhandledrejection', (e) => {
+  const msg = String(e.reason?.message ?? e.reason ?? '')
+  if (msg.includes('Database is closing') || msg.includes('Database is hidden')) {
+    e.preventDefault()
+  }
+})
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
